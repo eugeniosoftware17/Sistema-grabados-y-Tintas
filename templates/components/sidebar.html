@@ -1,0 +1,103 @@
+{% load static %}
+
+<!-- Overlay -->
+<div class="sb-overlay" onclick="toggleSidebar()"></div>
+
+<!-- Header -->
+<header class="sb-header-bar">
+    <button class="sb-hamburger" onclick="toggleSidebar()" aria-label="Menú">
+        <span></span>
+        <span></span>
+        <span></span>
+    </button>
+
+    <h1 class="sb-header-title">Engravings and Inks System(EIS)</h1>
+
+    <div class="sb-header-right">
+        <div class="sb-user">
+            <div class="sb-user-avatar">{{ request.user.username|first|upper }}</div>
+            <span class="sb-user-name">{{ request.user.username }}</span>
+        </div>
+        <button class="sb-btn sb-btn--refresh" onclick="refreshPage()">
+            <span class="sb-btn-refresh-icon">↻</span> Actualizar
+        </button>
+        <a href="{% url 'core:login' %}" class="sb-btn sb-btn--logout">⏻ Cerrar Sesión</a>
+    </div>
+    </header>
+
+    <!-- Sidebar -->
+    <nav class="sb-nav">
+    <div class="sb-nav-header">
+        <img src="{% static 'img/logo/Imagen1.png' %}" alt="Cigar Rings Logo" class="sb-nav-logo">
+    </div>
+
+    <div class="sb-nav-body">
+        {% with request.resolver_match.view_name as view_name %}
+
+        <div class="sb-section">
+            <a href="{% url 'core:dashboard' %}" class="sb-item {% if view_name == 'core:dashboard' %}sb-item--active{% endif %}">
+                <span class="sb-item-icon">📊</span>
+                <span>Dashboard</span>
+            </a>
+        </div>
+
+        <div class="sb-section">
+            <div class="sb-section-title">Operaciones</div>
+
+            <div class="sb-item-group">
+                <a href="#" class="sb-item" onclick="toggleSubmenu(this); return false;">
+                    <span class="sb-item-icon">🎨</span>
+                    <span>Gestión de Grabados</span>
+                    <span class="sb-arrow">▼</span>
+                </a>
+                <div class="sb-submenu">
+                    <a href="{% url 'grabados:grabado_estadisticas' %}" class="sb-subitem {% if view_name == 'grabados:grabado_estadisticas' %}sb-subitem--active{% endif %}">Estadísticas</a>
+                    <a href="{% url 'grabados:grabado_consulta' %}" class="sb-subitem {% if view_name == 'grabados:grabado_consulta' %}sb-subitem--active{% endif %}">Tabla de Consultas</a>
+                    <a href="{% url 'grabados:plani_consulta' %}" class="sb-subitem {% if view_name == 'grabados:plani_consulta' %}sb-subitem--active{% endif %}">Programación Plani</a>
+                    <a href="#" class="sb-subitem">Fabricación</a>
+                    <a href="#" class="sb-subitem">Inventario</a>
+                    
+                </div>
+            </div>
+
+            <div class="sb-item-group">
+                <a href="#" class="sb-item" onclick="toggleSubmenu(this); return false;">
+                    <span class="sb-item-icon">🖌️</span>
+                    <span>Gestión de Tintas</span>
+                    <span class="sb-arrow">▼</span>
+                </a>
+                <div class="sb-submenu">
+                    <a href="#" class="sb-subitem">Inventario</a>
+                </div>
+            </div>
+            <div class="sb-item-group">
+                <a href="#" class="sb-item" onclick="toggleSubmenu(this); return false;">
+                    <span class="sb-item-icon">🧑‍💻</span>
+                    <span>Gestión de TI</span>
+                    <span class="sb-arrow">▼</span>
+                </a>
+                <div class="sb-submenu">
+                    <a href="#" class="sb-subitem">Inventario</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="sb-section">
+            <div class="sb-section-title">Administración</div>
+            <a href="#" class="sb-item">
+                <span class="sb-item-icon">⚙️</span>
+                <span>Configuración</span>
+            </a>
+            <a href="#" class="sb-item">
+                <span class="sb-item-icon">👥</span>
+                <span>Usuarios</span>
+            </a>
+            <a href="#" class="sb-item">
+                <span class="sb-item-icon">📋</span>
+                <span>Reportes</span>
+            </a>
+        </div>
+
+        {% endwith %}
+    </div>
+</nav>

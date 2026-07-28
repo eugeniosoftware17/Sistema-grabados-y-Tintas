@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Programación Mensual (Plani) | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<style>
+    /* Estilo específico para resaltar que es la tabla de Plani */
+    .tabla-cabecera {
+        background: linear-gradient(135deg, #1e5d2b 0%, #2d8a3e 100%);
+    }
+    .boton--actualizar-plani {
+        background-color: #f39c12;
+        color: white;
+    }
+    .boton--actualizar-plani:hover {
+        background-color: #e67e22;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tabla-contenedor">
+
+    <!-- CABECERA -->
+    <div class="tabla-cabecera">
+      <div class="tabla-cabecera__titulo">
+        <svg viewBox="0 0 24 24" stroke-width="2">
+          <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+          <polyline points="13 2 13 9 20 9"/>
+        </svg>
+        Programación Mensual de Producción (PLANI)
+      </div>
+    </div>
+
+    <!-- BARRA DE HERRAMIENTAS -->
+    <div class="tabla-barra-herramientas">
+      <div class="buscador-contenedor">
+        <svg viewBox="0 0 24 24" stroke-width="2">
+          <circle cx="11" cy="11" r="8"/>
+          <path d="m21 21-4.35-4.35"/>
+        </svg>
+        <input type="text" id="buscador-input" placeholder="Buscar en la programación...">
+      </div>
+
+      <!-- BOTÓN DE SINCRONIZACIÓN -->
+      <button class="boton boton--actualizar-plani" id="btn-sincronizar" onclick="sincronizarConExcel()">
+        <svg viewBox="0 0 24 24" stroke-width="2">
+          <path d="M21 2v6h-6"/>
+          <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/>
+          <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+        </svg>
+        Actualizar desde Excel (Plani)
+      </button>
+
+      <!-- EXPORTAR -->
+      <div class="exportar-contenedor">
+        <button class="boton boton--exportar" id="boton-exportar" onclick="alternarExportar()">
+          <svg viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Exportar
+        </button>
+      </div>
+    </div>
+
+    <!-- ÁREA DE LA TABLA -->
+    <div class="tabla-area-datos">
+      <table class="tabla-registros" id="tabla-registros">
+        <thead>
+          <tr>
+            <th data-col="OF">OF</th>
+            <th data-col="of">OF_RE</th>
+            <th data-col="desc">DESCRIPCIÓN</th>
+            <th data-col="cliente">CLIENTE</th>
+            <th data-col="tipo">TIPO GRABADO</th>
+            <th data-col="gestion" style="min-width: 180px;">GESTIÓN DEL GRABADO</th>
+            <th data-col="maquina">MÁQUINA</th>
+            <th data-col="fecha">FECHA PROG.</th>
+          </tr>
+        </thead>
+        <tbody id="tabla-cuerpo">
+            <!-- Los datos del Excel se cargarán aquí -->
+        </tbody>
+      </table>
+    </div>
+
+    <!-- PIE DE TABLA -->
+    <div class="tabla-pie">
+      <div class="tabla-pie__info" id="pie-info"></div>
+      <div class="tabla-pie__paginacion" id="pie-paginacion"></div>
+    </div>
+
+</div>
+
+<!-- OVERLAY DE CARGA Y NOTIFICACIONES -->
+<div id="overlay-proceso" class="overlay-moderno" style="display:none;">
+    <div class="loader-contenido">
+        <div class="spinner-moderno"></div>
+        <h3 id="overlay-titulo">Consultando Datos...</h3>
+        <p id="overlay-mensaje">Estamos sincronizando el Excel con las bases de datos.</p>
+    </div>
+</div>
+
+<!-- DASHBOARD DE REGISTRO (MODAL) -->
+<div id="modal-registro" class="overlay-moderno" style="display:none;">
+    <div class="dashboard-card">
+        <div class="dashboard-cabecera">
+            <h3 id="dashboard-titulo-texto">Crear Nuevo Registro de Grabado</h3>
+            <p id="dashboard-subtitulo">OF: <span id="span-of"></span> | <span id="span-cliente"></span></p>
+        </div>
+        
+        <div class="dashboard-cuerpo">
+            <!-- FORMULARIO PARA CREAR REGISTRO (Pendientes - Datos Técnicos de Fabricación) -->
+            <form id="form-registro-entrada" style="display:none;">
+                <div class="fila-doble">
+                    <div class="campo-grupo">
+                        <label>Responsable:</label>
+                        <input type="text" id="reg-responsable" class="control-entrada" placeholder="Nombre del operario">
+                    </div>
+                    <div class="campo-grupo">
+                        <label>Tiempo Real (Hrs):</label>
+                        <input type="number" step="0.1" id="prod-tiempo" class="control-entrada" placeholder="Ej: 4.5">
+                    </div>
+                </div>
+
+                <div class="fila-doble">
+                    <div class="campo-grupo">
+                        <label>Peso Inicial (kg):</label>
+                        <input type="number" step="0.01" id="prod-peso-i" class="control-entrada" placeholder="0.00" oninput="calcularPerdida()">
+                    </div>
+                    <div class="campo-grupo">
+                        <label>Peso Final (kg):</label>
+                        <input type="number" step="0.01" id="prod-peso-f" class="control-entrada" placeholder="0.00" oninput="calcularPerdida()">
+                    </div>
+                </div>
+                
+                <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="font-size: 13px; color: #666;">
+                        Pérdida: <strong id="prod-perdida-msg" style="color: #d32f2f;">0.00 kg</strong>
+                    </div>
+                    <div style="background: #e8f5e9; padding: 8px 15px; border-radius: 8px; border: 1px solid #c8e6c9; color: #1b5e20; text-align: center;">
+                        <small style="display: block; font-size: 10px; opacity: 0.8; margin-bottom: 2px;">Fórmula: Pérdida × 6.6</small>
+                        💧 Baño sugerido: <strong id="prod-bano-msg" style="font-size: 16px;">0 ml</strong>
+                    </div>
+                </div>
+
+                <div class="fila-doble">
+                    <div class="campo-grupo">
+                        <label>Temperatura (ºC):</label>
+                        <input type="number" id="prod-temp" class="control-entrada" placeholder="Ej: 150">
+                    </div>
+                    <div class="campo-grupo">
+                        <label>RPM / Velocidad:</label>
+                        <input type="number" id="prod-rpm" class="control-entrada" placeholder="Ej: 800">
+                    </div>
+                </div>
+
+                <div class="campo-grupo">
+                    <label>Compensación / Ajustes:</label>
+                    <input type="text" id="prod-compensacion" class="control-entrada" placeholder="Describa ajustes técnicos...">
+                </div>
+
+                <!-- SECCIÓN DE REPORTE DE DAÑO -->
+                <div id="seccion-dano-fabricacion" style="margin-top: 20px; padding-top: 15px; border-top: 2px dashed #ffcdd2; display: none;">
+                    <label style="color: #d32f2f; font-weight: bold;">Motivo del Daño (Obligatorio):</label>
+                    <textarea id="reg-comentario-dano" class="control-entrada area-texto" rows="2" placeholder="Explique por qué se dañó el grabado en este proceso..."></textarea>
+                    
+                    <div style="margin-top: 10px;">
+                        <label style="font-size: 12px; color: #666;">Evidencia Visual (Foto):</label>
+                        <input type="file" id="reg-foto-dano" accept="image/*" class="control-entrada" style="padding: 5px;">
+                    </div>
+                </div>
+            </form>
+
+            <!-- FORMULARIO PARA RECOGER (Recogidos - Datos de Ubicación y Estado Físico) -->
+            <form id="form-registro-produccion" style="display:none;">
+                <div class="campo-grupo">
+                    <label>Estado Físico del Grabado:</label>
+                    <select id="reg-estado-fisico" class="control-entrada" required>
+                        <option value="BUENO">Bueno</option>
+                        <option value="DESGASTADO">Desgastado</option>
+                        <option value="DANADO">Dañado</option>
+                        <option value="REPETIR">REPETIR GRABADO</option>
+                    </select>
+                </div>
+
+                <div class="fila-doble">
+                    <div class="campo-grupo">
+                        <label>Ubicación Física (Cajón/Estante):</label>
+                        <input type="text" id="reg-ubicacion-grabado" class="control-entrada" placeholder="Ej: Cajon A-10" required>
+                    </div>
+                    <div class="campo-grupo">
+                        <label>Ubicación del Sobre:</label>
+                        <input type="text" id="reg-ubicacion-sobre" class="control-entrada" placeholder="Ej: Carpeta Arte">
+                    </div>
+                </div>
+
+                <div class="campo-grupo">
+                    <label>Observaciones de Almacén:</label>
+                    <textarea id="reg-comentario" class="control-entrada area-texto" rows="3" placeholder="Notas sobre el almacenamiento..."></textarea>
+                </div>
+            </form>
+        </div>
+
+        <div class="dashboard-pie">
+            <button class="boton boton--cancelar" onclick="cerrarDashboard()">Cancelar</button>
+            <button class="boton" id="btn-reportar-dano" style="background-color: #f44336; color: white; display: none;" onclick="activarReporteDano()">Reportar Daño</button>
+            <button class="boton boton--guardar" id="btn-dashboard-guardar" onclick="guardarDatosDashboard()">Guardar Datos</button>
+        </div>
+    </div>
+</div>
+
+<style>
+    /* Estilos para el Dashboard de Registro */
+    .dashboard-card {
+        background: white;
+        width: 90%;
+        max-width: 550px;
+        border-radius: 15px;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+        overflow: hidden;
+        animation: slideIn 0.3s ease-out;
+    }
+    @keyframes slideIn { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+    .dashboard-cabecera { background: #2d8a3e; color: white; padding: 20px 25px; }
+    .dashboard-cabecera h3 { margin: 0; font-size: 20px; }
+    .dashboard-cabecera p { margin: 5px 0 0; font-size: 14px; opacity: 0.9; }
+
+    .dashboard-cuerpo { padding: 25px; text-align: left; }
+    .campo-grupo { margin-bottom: 18px; }
+    .campo-grupo label { display: block; margin-bottom: 8px; font-weight: 600; color: #444; font-size: 14px; }
+    
+    .fila-doble { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+
+    .control-entrada {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        font-size: 14px;
+        transition: border-color 0.2s;
+    }
+    .control-entrada:focus { outline: none; border-color: #2d8a3e; box-shadow: 0 0 0 3px rgba(45, 138, 62, 0.1); }
+    .area-texto { resize: none; }
+
+    .dashboard-pie {
+        padding: 15px 25px;
+        background: #f8f9fa;
+        display: flex;
+        justify-content: flex-end;
+        gap: 12px;
+        border-top: 1px solid #eee;
+    }
+    .boton--cancelar { background: #e0e0e0; color: #555; }
+    .boton--guardar { background: #2d8a3e; color: white; }
+
+    /* Estilos para el Overlay Moderno */
+    .overlay-moderno {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(255, 255, 255, 0.9);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 3000;
+        backdrop-filter: blur(4px);
+    }
+    .loader-contenido {
+        text-align: center;
+        background: white;
+        padding: 40px;
+        border-radius: 20px;
+        box-shadow: 0 15px 50px rgba(0,0,0,0.1);
+        border: 1px solid #eee;
+    }
+    .spinner-moderno {
+        width: 60px; height: 60px;
+        border: 5px solid #f3f3f3;
+        border-top: 5px solid #2d8a3e;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        margin: 0 auto 20px;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    #overlay-titulo { color: #2d8a3e; margin-bottom: 10px; font-size: 24px; }
+    #overlay-mensaje { color: #666; font-size: 16px; }
+
+    /* Estilos para el Modal de Mapeo */
+    .modal-personalizado {
+        position: fixed;
+        top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.7);
+        display: flex; align-items: center; justify-content: center;
+        z-index: 2000;
+    }
+    .modal-contenido {
+        background: white; padding: 25px; border-radius: 12px;
+        width: 90%; max-width: 500px; box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+    }
+    .modal-cabecera h3 { margin: 0 0 10px 0; color: #2d8a3e; }
+    .modal-cuerpo { margin: 20px 0; max-height: 400px; overflow-y: auto; }
+    .mapeo-fila { display: flex; align-items: center; margin-bottom: 12px; gap: 15px; }
+    .mapeo-fila label { flex: 1; font-weight: bold; color: #555; }
+    .mapeo-fila select { flex: 1.5; padding: 8px; border-radius: 6px; border: 1px solid #ddd; }
+    .modal-pie { display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eee; pt: 15px; }
+</style>
+
+<!-- Input oculto para subir el Excel con mayor compatibilidad -->
+<input type="file" id="input-excel" style="display:none" 
+       accept=".xlsx, .xls, .csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" 
+       onchange="procesarArchivoExcel(event)">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="{% static 'js/plani_tabla.js' %}"></script>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard | CIGAR RINGS{% endblock %}
+
+{% block content %}
+
+
+
+<div class="dashboard-wrapper">
+    <!-- Fila 1: card ancha -->
+    <div class="dash-card card-wide">
+        <div class="card-label">Estado del sistema</div>
+        <div class="card-value">Operativo</div>
+    </div>
+
+    <!-- Fila 2: dos cards -->
+    <div class="dash-row">
+        <div class="dash-card">
+            <div class="card-label">Grabados hoy</div>
+            <div class="card-value">--</div>
+        </div>
+        <div class="dash-card">
+            <div class="card-label">Tintas disponibles</div>
+            <div class="card-value">--</div>
+        </div>
+    </div>
+
+    <!-- Fila 3: card alta -->
+    <div class="dash-card card-wide card-tall">
+        <div class="card-label">Actividad reciente</div>
+        <div class="card-empty">Sin datos disponibles</div>
+    </div>
+
+    <!-- Fila 4: card ancha -->
+    <div class="dash-card card-wide">
+        <div class="card-label">Resumen del día</div>
+        <div class="card-empty">Sin datos disponibles</div>
+    </div>
+
+</div>
+
+{% endblock %}

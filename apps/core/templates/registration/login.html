@@ -1,0 +1,108 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Cigar Rings System</title>
+    <link rel="stylesheet" href="{% static 'css/registration/login.css' %}">
+</head>
+<body>
+    <div class="login-container">
+        <!-- Header -->
+        <div class="login-header">
+            <div class="logo"><img src="{% static 'img/logo/Imagen1.png' %}" alt="Cigar Rings Logo"></div>
+            <div class="company-name">CIGAR RINGS</div>
+            <div class="company-subtitle">Engravings and Inks System</div>
+        </div>
+
+        <!-- Formulario -->
+        <form class="login-form" id="loginForm" method="post">
+            {% csrf_token %}
+            <div class="welcome-text">
+                <h2 class="welcome-title">Bienvenido</h2>
+                <p class="welcome-subtitle">Ingresa tus credenciales para acceder al sistema</p>
+            </div>
+
+            <!-- Mensajes de Error de Django -->
+            <div id="messageContainer">
+                {% if form.non_field_errors %}
+                    <div class="message error">
+                        {% for error in form.non_field_errors %}
+                            <p>{{ error }}</p>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+
+            <!-- Usuario -->
+            <div class="form-group">
+                <label for="{{ form.username.id_for_label }}">Usuario</label>
+                <div class="input-wrapper">
+                    {{ form.username }}
+                    <span class="input-icon">👤</span>
+                </div>
+                {% if form.username.errors %}
+                    <div class="message error" style="margin-top: 10px;">{{ form.username.errors.as_text }}</div>
+                {% endif %}
+            </div>
+
+            <!-- Contraseña -->
+            <div class="form-group">
+                <label for="{{ form.password.id_for_label }}">Contraseña</label>
+                <div class="input-wrapper">
+                    {{ form.password }}
+                    <span class="input-icon">🔒</span>
+                    <button type="button" class="password-toggle" id="passwordToggle">👁️</button>
+                </div>
+                 {% if form.password.errors %}
+                    <div class="message error" style="margin-top: 10px;">{{ form.password.errors.as_text }}</div>
+                {% endif %}
+            </div>
+
+            <!-- Opciones -->
+            <div class="form-options">
+                <div class="remember-me">
+                    <input type="checkbox" id="remember" name="remember">
+                    <label for="remember">Recordarme</label>
+                </div>
+                <a href="#" class="forgot-password" onclick="forgotPassword()">¿Olvidaste tu contraseña?</a>
+            </div>
+
+            <!-- Botón de login -->
+            <button type="submit" class="login-btn" id="loginBtn">
+                Iniciar Sesión
+            </button>
+        </form>
+
+        <!-- Footer -->
+        <div class="login-footer">
+            <p class="footer-text">© 2026 Cigar Rings EIS. Todos los derechos reservados.</p>
+            <div class="footer-links">
+                <a href="#" onclick="showHelp()">Ayuda</a>
+                <a href="#" onclick="showPrivacy()">Privacidad</a>
+                <a href="#" onclick="showTerms()">Términos</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Script para añadir atributos a los campos de Django
+        document.addEventListener('DOMContentLoaded', function() {
+            const usernameInput = document.getElementById('id_username');
+            if (usernameInput) {
+                usernameInput.placeholder = 'Ingresa tu usuario';
+                usernameInput.autocomplete = 'username';
+                usernameInput.required = true;
+            }
+            const passwordInput = document.getElementById('id_password');
+            if (passwordInput) {
+                passwordInput.placeholder = 'Ingresa tu contraseña';
+                passwordInput.autocomplete = 'current-password';
+                passwordInput.required = true;
+            }
+        });
+    </script>
+    <script src="{% static 'js/registration/login.js' %}"></script>
+</body>
+</html>

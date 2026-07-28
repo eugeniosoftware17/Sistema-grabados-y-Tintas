@@ -1,0 +1,47 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CIGAR RINGS</title>
+
+    <link rel="stylesheet" href="{% static 'css/components/sidebar.css' %}">
+    <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+  
+  
+    
+    {% block title %}CIGAR RINGS{% endblock %}
+    {% block extra_css %}{% endblock %}
+
+</head>
+<body>
+    <div id="refresh-notification" class="notification"></div>
+    {% include 'components/sidebar.html' %}
+
+    <main class="main-content">
+        {% if messages %}
+            <div class="messages-container">
+                {% for message in messages %}
+                    <div class="message {{ message.tags }}">{{ message }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+        {% block content %}
+            {# El contenido de las plantillas hijas irá aquí #}
+        {% endblock content %}
+    </main>
+
+<script src="{% static 'js/components/sidebar.js' %}"></script>
+
+</body>
+   
+
+    
+
+
+    
+   
+
+</html>
+<!-- Refreshed -->

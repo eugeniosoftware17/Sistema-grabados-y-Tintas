@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Estadísticas de Producción | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<style>
+    .stats-page { padding: 0; }
+    .stats-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+    .stats-title {
+        font-size: 22px;
+        font-weight: 700;
+        color: #1e5d2b;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+    }
+    .period-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+    .period-btn {
+        padding: 7px 16px;
+        border-radius: 20px;
+        border: 1.5px solid #d0e8d4;
+        background: white;
+        color: #3a7a46;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all .15s;
+    }
+    .period-btn:hover  { background: #eaf5ec; }
+    .period-btn.active { background: #2d8a3e; color: white; border-color: #2d8a3e; }
+    .refresh-btn {
+        padding: 7px 16px;
+        border-radius: 20px;
+        border: 1.5px solid #d0e8d4;
+        background: white;
+        color: #3a7a46;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+    .refresh-btn:hover { background: #eaf5ec; }
+
+    /* Subtítulos de sección */
+    .section-subtitle {
+        font-size: 13px;
+        font-weight: 600;
+        color: #2a5a34;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        margin: 28px 0 12px;
+    }
+
+    /* KPIs */
+    .kpi-row {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+    .kpi-card {
+        background: white;
+        border-radius: 10px;
+        border: 1px solid #e8f3ea;
+        padding: 16px 18px;
+        border-left: 4px solid #2d8a3e;
+    }
+    .kpi-card.warn  { border-left-color: #c0392b; }
+    .kpi-card.amber { border-left-color: #d4820a; }
+    .kpi-card.teal  { border-left-color: #0f8a6e; }
+    .kpi-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #6a8a72; font-weight: 500; margin-bottom: 4px; }
+    .kpi-value { font-size: 30px; font-weight: 700; color: #1e3d24; line-height: 1; }
+    .kpi-sub   { font-size: 12px; color: #6a8a72; margin-top: 4px; }
+    .kpi-sub.good { color: #1e7a36; }
+    .kpi-sub.bad  { color: #c0392b; }
+
+    /* Grid */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+    }
+    .stats-card {
+        background: white;
+        border-radius: 12px;
+        padding: 20px 22px;
+        border: 1px solid #e8f3ea;
+    }
+    .stats-card.full-width { grid-column: 1 / -1; }
+    .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        border-bottom: 1px solid #f0f7f2;
+        padding-bottom: 12px;
+    }
+    .card-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: #2a5a34;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0;
+    }
+    .chart-container          { position: relative; height: 240px; width: 100%; }
+    .chart-container.tall     { height: 300px; }
+    .chart-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #5a7a62; }
+    .legend-dot  { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+    @media (max-width: 700px) {
+        .kpi-row    { grid-template-columns: repeat(2,1fr); }
+        .stats-grid { grid-template-columns: 1fr; }
+        .stats-card.full-width { grid-column: auto; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="tabla-contenedor stats-page">
+
+    <div class="stats-header">
+        <h1 class="stats-title">
+            <svg viewBox="0 0 24 24" width="26" height="26" stroke="#2d8a3e" stroke-width="2" fill="none">
+                <path d="M18 20V10M12 20V4M6 20v-6"/>
+            </svg>
+            Estadísticas de grabados
+        </h1>
+        <div class="period-bar">
+            <button class="period-btn active" data-period="todo">Todo</button>
+            <button class="period-btn" data-period="semana">Semana</button>
+            <button class="period-btn" data-period="mes">Mes</button>
+            <button class="period-btn" data-period="año">Año</button>
+            
+            <div style="display: flex; align-items: center; gap: 5px; margin-left: 10px; border-left: 1px solid #ddd; padding-left: 15px;">
+                <input type="date" id="stats-fecha-desde" class="period-btn" style="padding: 5px 10px;">
+                <span style="color: #6a8a72; font-size: 12px;">a</span>
+                <input type="date" id="stats-fecha-hasta" class="period-btn" style="padding: 5px 10px;">
+                <button class="period-btn" onclick="aplicarRangoPersonalizado()">Filtrar</button>
+            </div>
+
+            <button class="refresh-btn" onclick="refreshStats()" style="margin-left: 10px;">
+                <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none">
+                    <path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+                Actualizar
+            </button>
+        </div>
+    </div>
+
+    <!-- KPIs principales -->
+    <div class="kpi-row">
+        <div class="kpi-card">
+            <div class="kpi-label">Total grabados</div>
+            <div class="kpi-value" id="kpi-total">—</div>
+            <div class="kpi-sub" id="kpi-total-sub">cargando…</div>
+        </div>
+        <div class="kpi-card">
+            <div class="kpi-label">Completados</div>
+            <div class="kpi-value" id="kpi-completados">—</div>
+            <div class="kpi-sub good" id="kpi-completados-sub">—</div>
+        </div>
+        <div class="kpi-card warn">
+            <div class="kpi-label">Para repetir</div>
+            <div class="kpi-value" id="kpi-repetir">—</div>
+            <div class="kpi-sub bad" id="kpi-repetir-sub">—</div>
+        </div>
+        <div class="kpi-card teal">
+            <div class="kpi-label">Operarios activos</div>
+            <div class="kpi-value" id="kpi-operarios">—</div>
+            <div class="kpi-sub" id="kpi-operarios-sub">—</div>
+        </div>
+    </div>
+
+    <!-- KPIs avanzados: merma, tiempo, incidencias, vida útil -->
+    <div class="section-subtitle">Indicadores de calidad y eficiencia</div>
+    <div class="kpi-row">
+        <div class="kpi-card amber" id="kpi-card-merma">
+            <div class="kpi-label">Merma promedio</div>
+            <div class="kpi-value" id="kpi-merma">—</div>
+            <div class="kpi-sub" id="kpi-merma-sub">cargando…</div>
+        </div>
+        <div class="kpi-card" id="kpi-card-tiempo">
+            <div class="kpi-label">Desviación de tiempo</div>
+            <div class="kpi-value" id="kpi-tiempo">—</div>
+            <div class="kpi-sub" id="kpi-tiempo-sub">—</div>
+        </div>
+        <div class="kpi-card" id="kpi-card-incidencias">
+            <div class="kpi-label">Incidencias / daños</div>
+            <div class="kpi-value" id="kpi-incidencias">—</div>
+            <div class="kpi-sub" id="kpi-incidencias-sub">—</div>
+        </div>
+        <div class="kpi-card" id="kpi-card-vidautil">
+            <div class="kpi-label">Alertas de vida útil</div>
+            <div class="kpi-value" id="kpi-vidautil">—</div>
+            <div class="kpi-sub" id="kpi-vidautil-sub">—</div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="stats-grid">
+
+        <!-- Tendencia — se oculta si hay menos de 2 fechas distintas -->
+        <div class="stats-card full-width" id="card-tendencia">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                    Tendencia por fecha de registro
+                </h3>
+                <span id="trend-period-label" style="font-size:12px;color:#6a8a72;"></span>
+            </div>
+            <div class="chart-legend" id="legend-tendencia"></div>
+            <div class="chart-container tall">
+                <canvas id="chart-tendencia" role="img" aria-label="Tendencia de grabados por fecha"></canvas>
+            </div>
+        </div>
+
+        <!-- Proceso -->
+        <div class="stats-card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><path d="M8 12h8M12 8v8"/></svg>
+                    Distribución por proceso
+                </h3>
+            </div>
+            <div class="chart-legend" id="legend-proceso"></div>
+            <div class="chart-container">
+                <canvas id="chart-proceso" role="img" aria-label="Distribución por tipo de proceso"></canvas>
+            </div>
+        </div>
+
+        <!-- Calidad -->
+        <div class="stats-card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                    Control de calidad / estados
+                </h3>
+            </div>
+            <div class="chart-legend" id="legend-calidad"></div>
+            <div class="chart-container">
+                <canvas id="chart-calidad" role="img" aria-label="Estados de los grabados"></canvas>
+            </div>
+        </div>
+
+        <!-- Maquinaria -->
+        <div class="stats-card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                    Uso de maquinaria
+                </h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart-maquina" role="img" aria-label="Grabados por máquina"></canvas>
+            </div>
+        </div>
+
+        <!-- Operarios -->
+        <div class="stats-card">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                    Rendimiento por operario
+                </h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart-operario" role="img" aria-label="Top operarios por grabados completados"></canvas>
+            </div>
+        </div>
+
+        <!-- Clientes -->
+        <div class="stats-card full-width">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                    Órdenes por cliente
+                </h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart-cliente" role="img" aria-label="Grabados por cliente"></canvas>
+            </div>
+        </div>
+
+        <!-- Merma de material -->
+        <div class="stats-card" id="card-merma">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M12 2c0 0-7 8-7 12a7 7 0 0014 0c0-4-7-12-7-12z"/></svg>
+                    Merma por máquina
+                </h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart-merma" role="img" aria-label="Porcentaje de merma promedio por máquina"></canvas>
+            </div>
+        </div>
+
+        <!-- Tiempo estimado vs real -->
+        <div class="stats-card" id="card-tiempo">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Tiempo estimado vs. real
+                </h3>
+            </div>
+            <div class="chart-legend" id="legend-tiempo"></div>
+            <div class="chart-container">
+                <canvas id="chart-tiempo" role="img" aria-label="Comparación de horas estimadas contra horas reales por proceso"></canvas>
+            </div>
+        </div>
+
+        <!-- Vida útil del grabado -->
+        <div class="stats-card" id="card-vidautil">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Vida útil del grabado
+                </h3>
+            </div>
+            <div class="chart-legend" id="legend-vidautil"></div>
+            <div class="chart-container">
+                <canvas id="chart-vidautil" role="img" aria-label="Usos acumulados de los grabados con mayor desgaste"></canvas>
+            </div>
+        </div>
+
+        <!-- Incidencias / daños -->
+        <div class="stats-card" id="card-incidencias">
+            <div class="card-header">
+                <h3 class="card-title">
+                    <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                    Incidencias por máquina
+                </h3>
+            </div>
+            <div class="chart-container">
+                <canvas id="chart-incidencias" role="img" aria-label="Incidencias con evidencia de daño por máquina"></canvas>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+{# ── Inyectar datos desde Django (recomendado) ───────────────── #}
+{# En tu vista, pasa: context['grabados_json'] = serializers.serialize('json', grabados_qs) #}
+{# y descomenta esto: #}
+{#
+<script>
+window.GRABADOS_DATA = {{ grabados_json|safe }}.map(function(g){
+    var f = g.fields;
+    return {
+        of:                g.pk,
+        referencia:        f.referencia        || '',
+        descripcion:       f.descripcion       || '',
+        cliente:           f.cliente           || '',
+        tipo_grabado:      f.tipo_grabado      || '',
+        proceso:           f.proceso           || '',
+        maquina:           f.maquina           || '',
+        estado:            f.estado            || '',
+        ubicacion:         f.ubicacion         || '',
+        sobre:             f.sobre             || '',
+        responsables:      f.responsables      || '',
+        usos_acumulados:   f.usos_acumulados,
+        cantidad_formatos: f.cantidad_formatos,
+        horas_proceso:     f.horas_proceso,
+        papel:             f.papel             || '',
+        peso_inicial:      f.peso_inicial,
+        peso_final:        f.peso_final,
+        perdida:           f.perdida,
+        temp:              f.temp,
+        rpm:               f.rpm,
+        tiempo:            f.tiempo,
+        compensacion:      f.compensacion,
+        foto_dano:         f.foto_dano         || '',
+        usuario:           f.usuario,
+        actualizado_el:    f.actualizado_el    || '',
+        creado_el:         f.creado_el         || '',
+        // Alias usados internamente por el dashboard (mismo dato, otro nombre)
+        fecha_prog:        f.fecha_programada  || '',
+        fecha_reg:         f.fecha_registro    || '',
+    };
+});
+</script>
+#}
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="{% static 'js/grabados_estadisticas.js' %}"></script>
+{% endblock %}

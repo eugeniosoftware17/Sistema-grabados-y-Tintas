@@ -1,0 +1,110 @@
+/* ── Dashboard ───────────────────────── */
+.dashboard-wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    /* max-width: 1000px; */
+    box-sizing: border-box;
+}
+
+.dash-header {
+    margin-bottom: 4px;
+}
+
+.dash-header h1 {
+    font-size: clamp(1.1rem, 3vw, 1.5rem);
+    font-weight: 700;
+    color: #1e6b2e;
+    margin: 0 0 6px;
+}
+
+.dash-header p {
+    font-size: clamp(0.8rem, 2vw, 0.95rem);
+    color: #666;
+    margin: 0;
+}
+
+/* Fila de dos columnas */
+.dash-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+/* Card base */
+.dash-card {
+    background: #ffffff;
+    border-radius: 12px;
+    padding: clamp(16px, 3vw, 28px);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    border: 1px solid rgba(0,0,0,0.06);
+    min-height: 90px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.card-tall {
+    min-height: 180px;
+}
+
+.card-label {
+    font-size: clamp(0.68rem, 1.5vw, 0.78rem);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: #999;
+}
+
+.card-value {
+    font-size: clamp(1.1rem, 3vw, 1.5rem);
+    font-weight: 700;
+    color: #1e6b2e;
+}
+
+.card-empty {
+    font-size: 0.88rem;
+    color: #bbb;
+    margin-top: auto;
+}
+
+/* ── Tablet (sidebar siempre visible, contenido más angosto) */
+@media (max-width: 900px) {
+    .dashboard-wrapper {
+        gap: 14px;
+    }
+}
+
+/* ── Mobile: sidebar se esconde, layout de 1 columna */
+@media (max-width: 768px) {
+    .main-content {
+        margin-left: 0 !important;
+        padding: 16px;
+    }
+
+    .dash-row {
+        grid-template-columns: 1fr;
+    }
+
+    .dash-card {
+        min-height: 75px;
+    }
+
+    .card-tall {
+        min-height: 140px;
+    }
+}
+
+/* ── Pantallas muy pequeñas */
+@media (max-width: 400px) {
+    .main-content {
+        padding: 12px;
+    }
+
+    .dashboard-wrapper {
+        gap: 10px;
+    }
+}
