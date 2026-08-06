@@ -79,22 +79,22 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'mssql',
-        'NAME': 'CigarRingsEIS',
-        'HOST': 'localhost\\SQLEXPRESS',
-        'PORT': '',
+        'NAME': config('DB_NAME'),
+        'HOST': config('DB_HOST'),
+        'PORT': config('DB_PORT', default=''),
         'OPTIONS': {
-            'driver': 'ODBC Driver 17 for SQL Server',
+            'driver': config('DB_DRIVER'),
             'trusted_connection': 'yes',
             'extra_params': 'TrustServerCertificate=yes',
         },
     },
     'externa_2012': {
         'ENGINE': 'mssql',
-        'NAME': 'CigarRingsDB',
-        'HOST': 'localhost\\SQLEXPRESS',
-        'PORT': '',
+        'NAME': config('DB_NAME_EXTERNA'),
+        'HOST': config('DB_HOST'),
+        'PORT': config('DB_PORT', default=''),
         'OPTIONS': {
-            'driver': 'ODBC Driver 17 for SQL Server',
+            'driver': config('DB_DRIVER'),
             'trusted_connection': 'yes',
             'extra_params': 'TrustServerCertificate=yes',
         },
