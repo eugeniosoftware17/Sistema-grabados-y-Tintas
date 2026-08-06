@@ -1,12 +1,13 @@
 import pandas as pd
 from django.db import connections
+from django.conf import settings
 import os
 import django
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
-excel_path = r"C:\Users\Eugenio\OneDrive\Desktop\Cigar_rings\CR PLANNING.xlsm"
+excel_path = settings.PLANI_EXCEL_PATH
 
 def find_missing_of():
     try:

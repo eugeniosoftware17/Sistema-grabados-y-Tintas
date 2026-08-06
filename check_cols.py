@@ -1,5 +1,7 @@
 import pandas as pd
-excel_path = r"C:\Users\Eugenio\OneDrive\Desktop\Cigar_rings\CR PLANNING.xlsm"
+from decouple import config
+
+excel_path = config('PLANI_EXCEL_PATH')
 
 def list_excel_columns():
     try:

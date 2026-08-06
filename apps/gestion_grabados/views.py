@@ -2,6 +2,7 @@ import pandas as pd
 import json
 import os
 import re
+import io
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
@@ -225,18 +226,23 @@ def sincronizar_plani(request):
             'errores_detalle': []
         }
 
-        xls = pd.ExcelFile(excel_path, engine='openpyxl')
+        # Se lee el archivo a memoria en modo solo-lectura y se cierra de inmediato,
+        # para no mantener el archivo abierto mientras otra persona lo edita en Excel.
+        with open(excel_path, 'rb') as f:
+            excel_bytes = io.BytesIO(f.read())
+
+        xls = pd.ExcelFile(excel_bytes, engine='openpyxl')
         hojas_reales = [h for h in hojas_a_procesar if h in xls.sheet_names]
 
         for nombre_hoja in hojas_reales:
-            df_full = pd.read_excel(excel_path, engine='openpyxl', sheet_name=nombre_hoja, header=None)
+            df_full = pd.read_excel(xls, sheet_name=nombre_hoja, header=None)
             header_row = 0
             for index, row in df_full.iterrows():
                 if any(str(val).strip().upper() == "ORDEN" for val in row):
                     header_row = index
                     break
-            
-            df = pd.read_excel(excel_path, engine='openpyxl', sheet_name=nombre_hoja, header=header_row)
+
+            df = pd.read_excel(xls, sheet_name=nombre_hoja, header=header_row)
             df.columns = [str(c).strip().upper() for c in df.columns]
 
             mapeo = {

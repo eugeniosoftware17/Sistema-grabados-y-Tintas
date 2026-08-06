@@ -1,7 +1,8 @@
 import pandas as pd
 import os
+from decouple import config
 
-excel_path = r"C:\Users\Eugenio\OneDrive\Desktop\Cigar_rings\CR PLANNING.xlsm"
+excel_path = config('PLANI_EXCEL_PATH')
 
 def get_sample_row():
     try:
