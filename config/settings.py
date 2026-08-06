@@ -160,5 +160,5 @@ SESSION_SAVE_EVERY_REQUEST = True
 
 
 
-# Ruta fija para el archivo de Programación 
-PLANI_EXCEL_PATH = r"C:\Users\Eugenio\OneDrive\Desktop\Cigar_rings\CR PLANNING.xlsm"
+# Ruta para el archivo de Programación (definida en .env)
+PLANI_EXCEL_PATH = config('PLANI_EXCEL_PATH')
