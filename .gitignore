@@ -11,6 +11,7 @@ venv/
 env/
 ENV/
 .env
+CLAUDE.md
 
 # IDEs
 .vscode/

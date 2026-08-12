@@ -417,7 +417,7 @@
 
     window.editarRegistro = function(idx) {
         const reg = registrosFiltrados[idx];
-        window.open(`/admin/gestion_grabados/ordenfabricacion/?q=${reg.of}`, '_blank');
+        window.open(`/crdadmin/gestion_grabados/ordenfabricacion/?q=${reg.of}`, '_blank');
     };
 
     window.eliminarRegistro = function(of_num, proceso) {
