@@ -10,6 +10,11 @@ const REGISTROS_POR_PAGINA = 10000; // Mostrar todo sin paginación
 let registroActivoIndex = null;
 let modoReporteDano = false;
 
+function getCookie(name) {
+    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return match ? decodeURIComponent(match[2]) : null;
+}
+
 // Función que dispara la sincronización desde el servidor
 function sincronizarConExcel() {
     const btn = document.getElementById('btn-sincronizar');
@@ -166,7 +171,10 @@ function enviarAMaquina(index) {
 
     fetch('/grabados/api/registrar/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': getCookie('csrftoken')
+        },
         body: JSON.stringify({
             of: reg.of,
             proceso: reg.proceso,
@@ -297,6 +305,7 @@ function guardarDatosDashboard() {
     fetch('/grabados/api/registrar/', {
         method: 'POST',
         // Nota: Al usar FormData no se pone el header Content-Type (el navegador lo hace solo con el boundary)
+        headers: { 'X-CSRFToken': getCookie('csrftoken') },
         body: formData
     })
     .then(response => response.json())

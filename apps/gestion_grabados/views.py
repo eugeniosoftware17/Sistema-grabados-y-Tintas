@@ -6,7 +6,6 @@ import io
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
 from .models import OrdenFabricacion
 from django.db import connections
@@ -193,7 +192,6 @@ def api_historial_orden(request, of_numero):
         'ref_id': ref_numero
     }, safe=False)
 
-@csrf_exempt
 @login_required
 def api_eliminar_registro(request):
     if request.method == 'POST':
@@ -343,7 +341,6 @@ def sincronizar_plani(request):
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
-@csrf_exempt
 @login_required
 def api_registrar_actividad(request):
     if request.method == 'POST':
@@ -430,7 +427,6 @@ def api_registrar_actividad(request):
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
     return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
 
-@csrf_exempt
 @login_required
 def confirmar_sincronizacion(request):
     if request.method == 'POST':

@@ -3,6 +3,11 @@
     'use strict';
     console.log("EIS: Script grabados_tabla.js cargado correctamente.");
 
+    function getCookie(name) {
+        const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return match ? decodeURIComponent(match[2]) : null;
+    }
+
     /* ============================================================
        1. ESTADO DE LA APLICACIÓN
     ============================================================ */
@@ -419,7 +424,10 @@
         if (!confirm(`¿Eliminar OF ${of_num} (${proceso})?`)) return;
         fetch('/grabados/api/eliminar/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            },
             body: JSON.stringify({ of: of_num, proceso: proceso })
         })
         .then(res => res.json())
