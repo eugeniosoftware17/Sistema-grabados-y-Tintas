@@ -31,12 +31,17 @@ INSTALLED_APPS = [
     'crispy_forms',
     'crispy_bootstrap5',
     'corsheaders',
+    'django_otp',
+    'django_otp.plugins.otp_totp',
 
     # Aplicaciones locales
     'apps.core',
     'apps.gestion_grabados',
     'apps.gestion_tintas',
 ]
+
+# Nombre que se muestra en apps de autenticación (1Password, etc.) al agregar la clave TOTP
+OTP_TOTP_ISSUER = 'Cigar Rings EIS'
 
 # Configuración de Crispy Forms
 CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
@@ -49,6 +54,8 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django_otp.middleware.OTPMiddleware',
+    'apps.core.middleware.RequireOTPMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]

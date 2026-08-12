@@ -1,0 +1,53 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificación en dos pasos - Cigar Rings System</title>
+    <link rel="stylesheet" href="{% static 'css/registration/login.css' %}">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-header">
+            <div class="logo"><img src="{% static 'img/logo/Imagen1.png' %}" alt="Cigar Rings Logo"></div>
+            <div class="company-name">CIGAR RINGS</div>
+            <div class="company-subtitle">Engravings and Inks System</div>
+        </div>
+
+        <form class="login-form" method="post">
+            {% csrf_token %}
+            <div class="welcome-text">
+                <h2 class="welcome-title">Verificación en dos pasos</h2>
+                <p class="welcome-subtitle">Ingresá el código de 6 dígitos de tu app de autenticación (1Password)</p>
+            </div>
+
+            {% if messages %}
+                <div id="messageContainer">
+                    {% for message in messages %}
+                        <div class="message {{ message.tags }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+
+            <div class="form-group">
+                <label for="id_token">Código</label>
+                <div class="input-wrapper">
+                    <input type="text" id="id_token" name="token" inputmode="numeric" pattern="[0-9]*"
+                           autocomplete="one-time-code" maxlength="6" placeholder="000000" autofocus required>
+                    <span class="input-icon">🔐</span>
+                </div>
+            </div>
+
+            <button type="submit" class="login-btn">Verificar</button>
+        </form>
+
+        <div class="login-footer">
+            <p class="footer-text">© 2026 Cigar Rings EIS. Todos los derechos reservados.</p>
+            <div class="footer-links">
+                <a href="{% url 'core:logout' %}">Cerrar sesión</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

@@ -3,6 +3,7 @@ crispy-bootstrap5==2026.3
 Django==6.0.2
 django-cors-headers==4.9.0
 django-crispy-forms==2.6
+django-otp==1.7.0
 pillow==12.1.1
 python-decouple==3.8
 sqlparse==0.5.5
