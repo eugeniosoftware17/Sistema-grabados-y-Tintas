@@ -20,6 +20,8 @@ urlpatterns = [
     path('api/registrar/', views.api_registrar_actividad, name='api_registrar'),
     path('api/historial/<str:of_numero>/', views.api_historial_orden, name='api_historial'),
     path('api/eliminar/', views.api_eliminar_registro, name='api_eliminar'),
+    path('api/bano/', views.api_estado_bano, name='api_estado_bano'),
+    path('api/bano/renovar/', views.api_renovar_bano, name='api_renovar_bano'),
 
     # --- Alta manual "Fabricación" (TEMPORAL, ver views_fabricacion.py) ---
     path('fabricacion/', views_fabricacion.fabricacion, name='fabricacion'),

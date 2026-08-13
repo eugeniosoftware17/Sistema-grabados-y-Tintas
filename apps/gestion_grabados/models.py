@@ -175,11 +175,18 @@ class OrdenFabricacion(models.Model):
         help_text="Duración real del proceso técnico, en minutos."
     )
     compensacion = models.CharField(
-        max_length=100, 
-        null=True, 
-        blank=True, 
-        verbose_name="Compensación",
-        help_text="Ajustes técnicos de compensación realizados."
+        max_length=100,
+        null=True,
+        blank=True,
+        verbose_name="Compensación (ml)",
+        help_text="Cantidad de compensación de baño aplicada, en ml."
+    )
+    compensacion_motivo = models.TextField(
+        null=True,
+        blank=True,
+        verbose_name="Motivo del ajuste de compensación",
+        help_text="Explicación de por qué se cambió la compensación respecto al valor "
+                   "recomendado (Pérdida × 6.6)."
     )
     usos_acumulados = models.IntegerField(
         default=0,
@@ -216,3 +223,33 @@ class OrdenFabricacion(models.Model):
         # Regla de integridad: Una misma OF puede estar en diferentes procesos,
         # pero no se puede repetir la misma OF dentro del mismo proceso.
         unique_together = [['of', 'proceso']]
+
+
+class EstadoBano(models.Model):
+    """
+    Contador único (una sola fila) de la compensación (ml) acumulada en el
+    baño físico compartido por todas las máquinas. Cada vez que se registra
+    un grabado se le suma el "Baño sugerido" de esa corrida. Al llegar a
+    LIMITE_ML hay que cambiar el agua del baño y reiniciar el contador.
+    """
+    LIMITE_ML = 2000
+
+    ml_acumulados = models.FloatField(
+        default=0,
+        verbose_name="ML acumulados desde la última renovación"
+    )
+    actualizado_el = models.DateTimeField(auto_now=True)
+    ultima_renovacion = models.DateTimeField(null=True, blank=True)
+    renovado_por = models.CharField(max_length=150, null=True, blank=True)
+
+    class Meta:
+        verbose_name = "Estado del Baño"
+        verbose_name_plural = "Estado del Baño"
+
+    def __str__(self):
+        return f"Baño: {self.ml_acumulados:.0f} / {self.LIMITE_ML} ml"
+
+    @classmethod
+    def obtener(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

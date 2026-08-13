@@ -96,6 +96,44 @@
        4. CARGA Y FILTROS
     ============================================================ */
 
+    function cargarEstadoBano() {
+        fetch('/grabados/api/bano/')
+            .then(res => res.json())
+            .then(eb => {
+                document.getElementById('kpi-bano').innerText = `${eb.ml_acumulados.toFixed(0)} / ${eb.limite} ml`;
+                const btn = document.getElementById('btn-renovar-bano');
+                const card = document.getElementById('kpi-card-bano');
+                const sub = document.getElementById('kpi-bano-sub');
+                if (eb.alerta) {
+                    card.style.borderTopColor = '#d32f2f';
+                    document.getElementById('kpi-bano').style.color = '#d32f2f';
+                    sub.innerText = '¡Hay que preparar un baño nuevo!';
+                    sub.style.color = '#d32f2f';
+                    btn.style.display = 'inline-block';
+                } else {
+                    card.style.borderTopColor = '#1565c0';
+                    document.getElementById('kpi-bano').style.color = '#1565c0';
+                    sub.innerText = eb.ultima_renovacion ? `Última renovación: ${eb.ultima_renovacion}` : ' ';
+                    sub.style.color = '#999';
+                    btn.style.display = 'none';
+                }
+            });
+    }
+
+    window.confirmarRenovacionBano = function () {
+        if (!confirm('¿Confirmás que ya se cambió el agua del baño? Esto reinicia el contador a 0.')) return;
+        fetch('/grabados/api/bano/renovar/', {
+            method: 'POST',
+            headers: { 'X-CSRFToken': getCookie('csrftoken') },
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'ok') { cargarEstadoBano(); }
+                else { alert('Error: ' + data.message); }
+            })
+            .catch(() => alert('Error de conexión.'));
+    };
+
     function cargarDatosDesdeDB() {
       // Cargar KPIs
       fetch('/grabados/api/kpis/')
@@ -106,6 +144,8 @@
             document.getElementById('kpi-repetir').innerText = kpis.para_repetir || 0;
             document.getElementById('kpi-pendientes').innerText = kpis.pendientes || 0;
         });
+
+      cargarEstadoBano();
 
       fetch('/grabados/api/registros/')
         .then(res => res.json())

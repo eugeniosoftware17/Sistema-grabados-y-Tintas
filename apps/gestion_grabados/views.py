@@ -7,7 +7,7 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from .models import OrdenFabricacion
+from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
 
 def buscar_datos_externos(of_numero, proceso):
@@ -397,6 +397,7 @@ def api_registrar_actividad(request):
             if data.get('maquina'):
                 obj.maquina = data.get('maquina')
 
+            bano_info = None
             if tipo == 'CREAR_FABRICACION':
                 obj.responsables = data.get('responsable')
                 obj.tiempo = data.get('tiempo')
@@ -409,7 +410,22 @@ def api_registrar_actividad(request):
                 except:
                     obj.perdida = 0
                 obj.temp = data.get('temp'); obj.rpm = data.get('rpm'); obj.compensacion = data.get('compensacion')
+                obj.compensacion_motivo = data.get('compensacion_motivo')
                 obj.estado = 'EN_PROCESO'
+
+                # Compensación de baño: se acumula en el contador único compartido
+                # por todas las máquinas (ver EstadoBano). Cuando llega al límite
+                # hay que avisarle al usuario que toca renovar el agua del baño.
+                bano_ml = (obj.perdida / 1000) * 6.6 if obj.perdida else 0
+                if bano_ml > 0:
+                    estado_bano = EstadoBano.obtener()
+                    estado_bano.ml_acumulados += bano_ml
+                    estado_bano.save()
+                    bano_info = {
+                        'ml_acumulados': round(estado_bano.ml_acumulados, 1),
+                        'limite': EstadoBano.LIMITE_ML,
+                        'alerta': estado_bano.ml_acumulados >= EstadoBano.LIMITE_ML,
+                    }
             
             elif tipo == 'ENVIAR_MAQUINA':
                 obj.estado = 'EN_MAQUINA'
@@ -439,10 +455,36 @@ def api_registrar_actividad(request):
                 obj.usuario = request.user
                 obj.save()
 
-            return JsonResponse({'status': 'ok', 'message': 'Registro EIS actualizado'})
+            respuesta = {'status': 'ok', 'message': 'Registro EIS actualizado'}
+            if bano_info:
+                respuesta['bano'] = bano_info
+            return JsonResponse(respuesta)
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
     return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
+
+@login_required
+def api_estado_bano(request):
+    eb = EstadoBano.obtener()
+    return JsonResponse({
+        'ml_acumulados': round(eb.ml_acumulados, 1),
+        'limite': EstadoBano.LIMITE_ML,
+        'alerta': eb.ml_acumulados >= EstadoBano.LIMITE_ML,
+        'ultima_renovacion': eb.ultima_renovacion.strftime('%d/%m/%Y %H:%M') if eb.ultima_renovacion else None,
+        'renovado_por': eb.renovado_por,
+    })
+
+@login_required
+def api_renovar_bano(request):
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
+    from django.utils import timezone
+    eb = EstadoBano.obtener()
+    eb.ml_acumulados = 0
+    eb.ultima_renovacion = timezone.now()
+    eb.renovado_por = request.user.username
+    eb.save()
+    return JsonResponse({'status': 'ok', 'message': 'Baño renovado. Contador reiniciado.'})
 
 @login_required
 def confirmar_sincronizacion(request):

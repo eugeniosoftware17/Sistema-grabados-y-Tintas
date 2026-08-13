@@ -22,7 +22,7 @@
     </div>
 
     <!-- DASHBOARD DE INDICADORES (KPIs) -->
-    <div class="kpi-dashboard" id="kpi-dashboard" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; margin-bottom: 25px;">
+    <div class="kpi-dashboard" id="kpi-dashboard" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px; margin-bottom: 25px;">
         <div class="kpi-tarjeta" style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #ddd; border-top: 4px solid #f39c12;">
             <div style="font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase;">En Máquina</div>
             <div id="kpi-maquina" style="font-size: 28px; font-weight: 800; color: #f39c12; margin-top: 5px;">0</div>
@@ -38,6 +38,12 @@
         <div class="kpi-tarjeta" style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #ddd; border-top: 4px solid #7a9485;">
             <div style="font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase;">Pendientes</div>
             <div id="kpi-pendientes" style="font-size: 28px; font-weight: 800; color: #7a9485; margin-top: 5px;">0</div>
+        </div>
+        <div class="kpi-tarjeta" id="kpi-card-bano" style="background: white; padding: 20px; border-radius: 12px; border: 1px solid #ddd; border-top: 4px solid #1565c0;">
+            <div style="font-size: 11px; font-weight: 700; color: #666; text-transform: uppercase;">Compensación de Baño</div>
+            <div id="kpi-bano" style="font-size: 22px; font-weight: 800; color: #1565c0; margin-top: 5px;">0 / 2000 ml</div>
+            <div id="kpi-bano-sub" style="font-size: 10px; color: #999; margin-top: 3px;">&nbsp;</div>
+            <button id="btn-renovar-bano" class="boton" style="margin-top: 8px; font-size: 11px; padding: 5px 10px; display:none;" onclick="confirmarRenovacionBano()">🧴 Ya cambié el agua</button>
         </div>
     </div>
 

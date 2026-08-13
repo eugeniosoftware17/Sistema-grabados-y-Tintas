@@ -9,6 +9,7 @@ let paginaActual = 1;
 const REGISTROS_POR_PAGINA = 10000; // Mostrar todo sin paginación
 let registroActivoIndex = null;
 let modoReporteDano = false;
+let compensacionRecomendada = 0;
 
 function getCookie(name) {
     const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
@@ -230,8 +231,30 @@ function abrirDashboard(index) {
         document.getElementById('reg-responsable').value = reg.responsable || '';
         const horasProcesoEst = parseFloat(reg.horas_proceso);
         document.getElementById('prod-tiempo').value = isNaN(horasProcesoEst) ? '' : Math.round(horasProcesoEst * 60);
+        actualizarBanoAcumulado();
     }
     document.getElementById('modal-registro').style.display = 'flex';
+}
+
+function actualizarBanoAcumulado() {
+    const caja = document.getElementById('prod-bano-acumulado-caja');
+    const msg = document.getElementById('prod-bano-acumulado-msg');
+    if (!caja || !msg) return;
+    fetch('/grabados/api/bano/')
+        .then(r => r.json())
+        .then(eb => {
+            msg.innerText = `${eb.ml_acumulados.toFixed(0)} / ${eb.limite} ml`;
+            if (eb.alerta) {
+                caja.style.background = '#fdecea';
+                caja.style.borderColor = '#f5c6c6';
+                caja.style.color = '#c0392b';
+            } else {
+                caja.style.background = '#e3f2fd';
+                caja.style.borderColor = '#bbdefb';
+                caja.style.color = '#1565c0';
+            }
+        })
+        .catch(() => { msg.innerText = '— / 2000 ml'; });
 }
 
 function activarReporteDano() {
@@ -295,6 +318,14 @@ function guardarDatosDashboard() {
         } else {
             formData.append('tipo_registro', 'CREAR_FABRICACION');
         }
+
+        const cajaMotivo = document.getElementById('compensacion-motivo-caja');
+        const motivoComp = document.getElementById('prod-compensacion-motivo').value.trim();
+        if (cajaMotivo.style.display !== 'none' && !motivoComp) {
+            alert("Cambiaste la compensación del valor recomendado: explicá el motivo antes de guardar.");
+            return;
+        }
+
         formData.append('responsable', responsable);
         formData.append('tiempo', document.getElementById('prod-tiempo').value);
         formData.append('peso_i', document.getElementById('prod-peso-i').value);
@@ -302,6 +333,7 @@ function guardarDatosDashboard() {
         formData.append('temp', document.getElementById('prod-temp').value);
         formData.append('rpm', document.getElementById('prod-rpm').value);
         formData.append('compensacion', document.getElementById('prod-compensacion').value);
+        formData.append('compensacion_motivo', motivoComp);
     }
 
     btnGuardar.disabled = true;
@@ -314,7 +346,14 @@ function guardarDatosDashboard() {
     .then(response => response.json())
     .then(res => {
         if (res.status === 'ok') {
-            alert(res.message);
+            if (res.bano) {
+                const aviso = res.bano.alerta
+                    ? `⚠️ Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml. ¡Hay que preparar un baño nuevo! (confirmalo en la Tabla de Consultas)`
+                    : `Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml de compensación acumulados.`;
+                alert(`${res.message}\n\n${aviso}`);
+            } else {
+                alert(res.message);
+            }
             // Actualizar estado localmente
             if (formData.get('tipo_registro') === 'CREAR_FABRICACION') reg.estado_db = 'EN_PROCESO';
             else if (formData.get('tipo_registro') === 'ALMACEN_RECOGER') {
@@ -347,10 +386,25 @@ function calcularPerdida() {
     if (msgBano) msgBano.innerText = mlBano.toFixed(0) + ' ml';
 
     // Rellenar automáticamente el campo de compensación como sugerencia
+    compensacionRecomendada = Math.round(mlBano);
     const inputComp = document.getElementById('prod-compensacion');
     if (inputComp) {
-        inputComp.value = mlBano > 0 ? `${mlBano.toFixed(0)} ml de baño` : '';
+        inputComp.value = mlBano > 0 ? compensacionRecomendada : '';
     }
+    verificarCambioCompensacion();
+}
+
+function verificarCambioCompensacion() {
+    const inputComp = document.getElementById('prod-compensacion');
+    const caja = document.getElementById('compensacion-motivo-caja');
+    const motivo = document.getElementById('prod-compensacion-motivo');
+    if (!inputComp || !caja) return;
+
+    const valorActual = parseInt(inputComp.value, 10) || 0;
+    const cambiado = valorActual !== compensacionRecomendada;
+
+    caja.style.display = cambiado ? 'block' : 'none';
+    if (!cambiado && motivo) motivo.value = '';
 }
 
 function cerrarDashboard() {
