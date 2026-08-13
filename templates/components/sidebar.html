@@ -21,7 +21,10 @@
         <button class="sb-btn sb-btn--refresh" onclick="refreshPage()">
             <span class="sb-btn-refresh-icon">↻</span> Actualizar
         </button>
-        <a href="{% url 'core:login' %}" class="sb-btn sb-btn--logout">⏻ Cerrar Sesión</a>
+        <form method="post" action="{% url 'core:logout' %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="sb-btn sb-btn--logout">⏻ Cerrar Sesión</button>
+        </form>
     </div>
     </header>
 

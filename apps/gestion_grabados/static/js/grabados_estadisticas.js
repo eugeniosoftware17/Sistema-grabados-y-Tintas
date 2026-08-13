@@ -160,10 +160,10 @@ function processData(data) {
         const nombres = splitResponsables(r.responsables || r.responsable);
         nombres.forEach(n => { counts.responsable[n] = (counts.responsable[n] || 0) + 1; });
 
-        // ── Merma de material (peso_inicial, peso_final, perdida) ──
-        const pesoIni = parseFloat(r.peso_inicial);
-        const pesoFin = parseFloat(r.peso_final);
-        let perd = parseFloat(r.perdida);
+        // ── Merma de material (peso_inicial, peso_final y perdida, todo en gramos) ──
+        const pesoIni = parseFloat(r.peso_inicial); // g
+        const pesoFin = parseFloat(r.peso_final);   // g
+        let perd = parseFloat(r.perdida);           // g
         if (isNaN(perd) && !isNaN(pesoIni) && !isNaN(pesoFin)) perd = pesoIni - pesoFin;
         if (!isNaN(perd) && !isNaN(pesoIni) && pesoIni > 0) {
             const pct = (perd / pesoIni) * 100;
@@ -177,21 +177,22 @@ function processData(data) {
             merma.registros++;
         }
 
-        // ── Eficiencia de tiempo (horas_proceso = estimado, tiempo = real) ──
-        const horasEst = parseFloat(r.horas_proceso);
+        // ── Eficiencia de tiempo, en minutos (horas_proceso×60 = estimado, tiempo = real) ──
+        const horasProcesoEst = parseFloat(r.horas_proceso);
+        const estMin = isNaN(horasProcesoEst) ? NaN : horasProcesoEst * 60;
         const tiempoReal = parseFloat(r.tiempo);
-        if (!isNaN(horasEst) && !isNaN(tiempoReal) && horasEst > 0) {
+        if (!isNaN(estMin) && !isNaN(tiempoReal) && estMin > 0) {
             if (!tiempo.porProceso[proc]) tiempo.porProceso[proc] = { est:0, real:0, count:0 };
-            tiempo.porProceso[proc].est  += horasEst;
+            tiempo.porProceso[proc].est  += estMin;
             tiempo.porProceso[proc].real += tiempoReal;
             tiempo.porProceso[proc].count++;
 
             if (!tiempo.porMaquina[maq]) tiempo.porMaquina[maq] = { est:0, real:0, count:0 };
-            tiempo.porMaquina[maq].est  += horasEst;
+            tiempo.porMaquina[maq].est  += estMin;
             tiempo.porMaquina[maq].real += tiempoReal;
             tiempo.porMaquina[maq].count++;
 
-            tiempo.totalEst  += horasEst;
+            tiempo.totalEst  += estMin;
             tiempo.totalReal += tiempoReal;
             tiempo.registros++;
         }
@@ -249,7 +250,7 @@ function updateKPIs(proc) {
     // ── KPIs avanzados: merma, tiempo, incidencias, vida útil ──
     setText('kpi-merma', proc.mermaPromedio === null ? '—' : `${proc.mermaPromedio.toFixed(1)}%`);
     setText('kpi-merma-sub', proc.merma.registros
-        ? `${proc.merma.totalPerdida.toFixed(1)} kg perdidos en ${proc.merma.registros} OF con datos de peso`
+        ? `${proc.merma.totalPerdida.toFixed(0)} g perdidos en ${proc.merma.registros} OF con datos de peso`
         : 'sin datos de peso registrados');
     toggleClass('kpi-card-merma', 'warn', proc.mermaPromedio !== null && proc.mermaPromedio > MERMA_ALERTA);
 
@@ -522,12 +523,12 @@ function buildTiempo(tiempo) {
     if (!entries.length) return;
 
     const labels = entries.map(e=>e[0]);
-    const est  = entries.map(([,v]) => Number((v.est  / v.count).toFixed(2)));
-    const real = entries.map(([,v]) => Number((v.real / v.count).toFixed(2)));
+    const est  = entries.map(([,v]) => Number((v.est  / v.count).toFixed(0)));
+    const real = entries.map(([,v]) => Number((v.real / v.count).toFixed(0)));
 
     buildLegend('legend-tiempo', [
-        { label: 'Estimado (horas_proceso)', color: COLORS.gray },
-        { label: 'Real (tiempo)',            color: COLORS.blue },
+        { label: 'Estimado (min)', color: COLORS.gray },
+        { label: 'Real (min)',     color: COLORS.blue },
     ]);
 
     charts.tiempo = new Chart(el, {

@@ -248,7 +248,10 @@ def sincronizar_plani(request):
                 'descripcion': ['REFERENCIA'],
                 'cliente': ['CLIENTE', 'NOMBRE'],
                 'horas_proceso': ['HORAS PROCESO', 'HORAS', 'PREV HR'],
-                'fecha_programada': ['FECHA STAMPING', 'FECHA EMBOSSING', 'FECHA', 'DATE', 'FECHA PROG.']
+                'fecha_programada': ['FECHA STAMPING', 'FECHA EMBOSSING', 'FECHA', 'DATE', 'FECHA PROG.'],
+                # En el Excel, la columna "RESPONSABLE" contiene el nombre de la máquina
+                # (ej: GIETZ 01, GIETZ 02, STAR FOIL, GTP), no una persona.
+                'maquina': ['RESPONSABLE', 'MAQUINA', 'MÁQUINA']
             }
 
             columnas_finales = {}
@@ -372,13 +375,19 @@ def api_registrar_actividad(request):
             obj, created = OrdenFabricacion.objects.get_or_create(
                 of=of_num, proceso=proceso,
                 defaults={
-                    'cliente': data.get('cliente', 'Desconocido'), 
+                    'cliente': data.get('cliente', 'Desconocido'),
                     'descripcion': data.get('descripcion', '—'),
                     'referencia': data.get('referencia'),
                     'fecha_programada': fecha_prog_dt,
-                    'fecha_registro': timezone.now().date()
+                    'fecha_registro': timezone.now().date(),
+                    'maquina': data.get('maquina'),
                 }
             )
+
+            # Mantener la máquina al día (viene del Excel en cada sincronización),
+            # incluso si el registro ya existía de antes.
+            if data.get('maquina'):
+                obj.maquina = data.get('maquina')
 
             if tipo == 'CREAR_FABRICACION':
                 obj.responsables = data.get('responsable')
@@ -386,9 +395,9 @@ def api_registrar_actividad(request):
                 obj.peso_inicial = data.get('peso_i')
                 obj.peso_final = data.get('peso_f')
                 try:
-                    pi = float(data.get('peso_i') or 0)
-                    pf = float(data.get('peso_f') or 0)
-                    obj.perdida = max(0, pi - pf)
+                    pi = float(data.get('peso_i') or 0)  # g
+                    pf = float(data.get('peso_f') or 0)  # g
+                    obj.perdida = max(0, pi - pf)  # gramos
                 except:
                     obj.perdida = 0
                 obj.temp = data.get('temp'); obj.rpm = data.get('rpm'); obj.compensacion = data.get('compensacion')

@@ -138,22 +138,22 @@ class OrdenFabricacion(models.Model):
         help_text="Nombres de los operarios que trabajaron en la orden."
     )
     peso_inicial = models.FloatField(
-        null=True, 
-        blank=True, 
-        verbose_name="Peso Inicial",
-        help_text="Peso del material al iniciar el proceso."
+        null=True,
+        blank=True,
+        verbose_name="Peso Inicial (g)",
+        help_text="Peso del material al iniciar el proceso, en gramos."
     )
     peso_final = models.FloatField(
-        null=True, 
-        blank=True, 
-        verbose_name="Peso Final",
-        help_text="Peso del material al finalizar el proceso."
+        null=True,
+        blank=True,
+        verbose_name="Peso Final (g)",
+        help_text="Peso del material al finalizar el proceso, en gramos."
     )
     perdida = models.FloatField(
-        null=True, 
-        blank=True, 
-        verbose_name="Pérdida",
-        help_text="Diferencia de peso calculada durante el proceso."
+        null=True,
+        blank=True,
+        verbose_name="Pérdida (g)",
+        help_text="Diferencia de peso calculada durante el proceso, en gramos."
     )
     temp = models.FloatField(
         null=True, 
@@ -168,11 +168,11 @@ class OrdenFabricacion(models.Model):
         help_text="Revoluciones por minuto de la maquinaria."
     )
     tiempo = models.CharField(
-        max_length=50, 
-        null=True, 
-        blank=True, 
-        verbose_name="Tiempo",
-        help_text="Duración real del proceso técnico."
+        max_length=50,
+        null=True,
+        blank=True,
+        verbose_name="Tiempo Real (min)",
+        help_text="Duración real del proceso técnico, en minutos."
     )
     compensacion = models.CharField(
         max_length=100, 

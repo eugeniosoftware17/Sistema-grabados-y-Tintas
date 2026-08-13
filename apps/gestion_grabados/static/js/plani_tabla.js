@@ -178,7 +178,8 @@ function enviarAMaquina(index) {
         body: JSON.stringify({
             of: reg.of,
             proceso: reg.proceso,
-            tipo_registro: 'ENVIAR_MAQUINA'
+            tipo_registro: 'ENVIAR_MAQUINA',
+            maquina: reg.maquina || ''
         })
     })
     .then(response => response.json())
@@ -227,7 +228,8 @@ function abrirDashboard(index) {
         formProduccion.style.display = 'none';
         
         document.getElementById('reg-responsable').value = reg.responsable || '';
-        document.getElementById('prod-tiempo').value = reg.horas_proceso || '';
+        const horasProcesoEst = parseFloat(reg.horas_proceso);
+        document.getElementById('prod-tiempo').value = isNaN(horasProcesoEst) ? '' : Math.round(horasProcesoEst * 60);
     }
     document.getElementById('modal-registro').style.display = 'flex';
 }
@@ -256,6 +258,7 @@ function guardarDatosDashboard() {
     formData.append('descripcion', reg.descripcion);
     formData.append('referencia', reg.ref_ext);
     formData.append('fecha_programada', reg.fecha_programada);
+    formData.append('maquina', reg.maquina || '');
 
     if (esListoRecoger) {
         const ubicacion = document.getElementById('reg-ubicacion-grabado').value.trim();
@@ -329,16 +332,17 @@ function guardarDatosDashboard() {
 }
 
 function calcularPerdida() {
-    const pi = parseFloat(document.getElementById('prod-peso-i').value) || 0;
-    const pf = parseFloat(document.getElementById('prod-peso-f').value) || 0;
-    const perdida = Math.max(0, pi - pf);
-    
-    // Actualizar mensaje de pérdida en kg
-    const msgPerdida = document.getElementById('prod-perdida-msg');
-    if (msgPerdida) msgPerdida.innerText = perdida.toFixed(2) + ' kg';
+    const pi = parseFloat(document.getElementById('prod-peso-i').value) || 0; // g
+    const pf = parseFloat(document.getElementById('prod-peso-f').value) || 0; // g
+    const perdida = Math.max(0, pi - pf); // gramos
 
-    // Calcular compensación (Baño): Pérdida * 6.6
-    const mlBano = perdida * 6.6;
+    // Actualizar mensaje de pérdida en gramos
+    const msgPerdida = document.getElementById('prod-perdida-msg');
+    if (msgPerdida) msgPerdida.innerText = perdida.toFixed(0) + ' g';
+
+    // Compensación (Baño): fórmula histórica Pérdida(kg) × 6.6 ml, mantenida igual
+    // pero ahora la pérdida se calcula en gramos, así que se divide /1000.
+    const mlBano = (perdida / 1000) * 6.6;
     const msgBano = document.getElementById('prod-bano-msg');
     if (msgBano) msgBano.innerText = mlBano.toFixed(0) + ' ml';
 

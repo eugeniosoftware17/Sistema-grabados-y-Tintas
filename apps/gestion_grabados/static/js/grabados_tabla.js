@@ -361,7 +361,7 @@
                     const colorTipo = tipo === 'Principal' ? '#2d8a3e' : '#e67e22';
                     const datosTecnicos = `
                         <div style="font-size:10px;">
-                            ${h.peso_inicial || '—'} / ${h.peso_final || '—'} kg<br>
+                            ${h.peso_inicial || '—'} / ${h.peso_final || '—'} g<br>
                             ${h.temp || '—'}°C | ${h.rpm || '—'} RPM
                         </div>
                     `;
