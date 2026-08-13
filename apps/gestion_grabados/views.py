@@ -20,7 +20,7 @@ def buscar_datos_externos(of_numero, proceso):
         of_limpia = re.sub(r'\D', '', of_str)
         
         if not of_limpia:
-            return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0'}
+            return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
 
         of_int = int(of_limpia)
 
@@ -29,15 +29,21 @@ def buscar_datos_externos(of_numero, proceso):
                 col_maq = 'PRO_stamping_Maquina'
                 col_of_ref = 'OF_Stamping'
                 col_acabado = 'Acabat_Stamping'
+                col_horas = 'Prev_Horas_Stamping'
             else:
                 col_maq = 'PRO_Embossing'
                 col_of_ref = 'OF_Embossing'
                 col_acabado = 'Acabat_Embossing'
-            
-            query = f"SELECT {col_maq}, Sobre_pelicula, {col_of_ref}, {col_acabado} FROM CigarRings2012 WHERE G_orden = %s"
+                col_horas = None  # No existe columna de horas previstas para Embossing
+
+            columnas = f"{col_maq}, Sobre_pelicula, {col_of_ref}, {col_acabado}, G_Papel_Fabricante_2012"
+            if col_horas:
+                columnas += f", {col_horas}"
+
+            query = f"SELECT {columnas} FROM CigarRings2012 WHERE G_orden = %s"
             cursor.execute(query, [of_int])
             row = cursor.fetchone()
-            
+
             if row:
                 val_acabado = str(row[3]).strip() if row[3] is not None else '0'
                 if val_acabado.lower() in ['true', '1', '1.0', 'ok', 's', 'y']:
@@ -50,11 +56,13 @@ def buscar_datos_externos(of_numero, proceso):
                     'sobre_ext': row[1] if row[1] else '—',
                     'ref_ext': row[2] if row[2] else '—',
                     'acabado_ext': val_acabado,
+                    'papel_ext': row[4] if row[4] else '—',
+                    'horas_ext': row[5] if col_horas and row[5] is not None else None,
                     'encontrado_ext': True
                 }
     except Exception as e:
         print(f"Error consultando DB externa para OF {of_numero}: {e}")
-    return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0'}
+    return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
 
 @login_required
 def grabado_consulta(request):

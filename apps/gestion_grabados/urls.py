@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import views_fabricacion
 
 
 app_name = 'grabados'
@@ -19,4 +20,10 @@ urlpatterns = [
     path('api/registrar/', views.api_registrar_actividad, name='api_registrar'),
     path('api/historial/<str:of_numero>/', views.api_historial_orden, name='api_historial'),
     path('api/eliminar/', views.api_eliminar_registro, name='api_eliminar'),
+
+    # --- Alta manual "Fabricación" (TEMPORAL, ver views_fabricacion.py) ---
+    path('fabricacion/', views_fabricacion.fabricacion, name='fabricacion'),
+    path('api/fabricacion/buscar-externo/', views_fabricacion.api_buscar_externo, name='api_fabricacion_buscar_externo'),
+    path('api/fabricacion/registrar/', views_fabricacion.api_registrar_manual, name='api_fabricacion_registrar'),
+    path('api/fabricacion/listar/', views_fabricacion.api_listar_manual, name='api_fabricacion_listar'),
 ]

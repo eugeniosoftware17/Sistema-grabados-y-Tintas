@@ -57,7 +57,7 @@
                     <a href="{% url 'grabados:grabado_estadisticas' %}" class="sb-subitem {% if view_name == 'grabados:grabado_estadisticas' %}sb-subitem--active{% endif %}">Estadísticas</a>
                     <a href="{% url 'grabados:grabado_consulta' %}" class="sb-subitem {% if view_name == 'grabados:grabado_consulta' %}sb-subitem--active{% endif %}">Tabla de Consultas</a>
                     <a href="{% url 'grabados:plani_consulta' %}" class="sb-subitem {% if view_name == 'grabados:plani_consulta' %}sb-subitem--active{% endif %}">Programación Plani</a>
-                    <a href="#" class="sb-subitem">Fabricación</a>
+                    <a href="{% url 'grabados:fabricacion' %}" class="sb-subitem {% if view_name == 'grabados:fabricacion' %}sb-subitem--active{% endif %}">Fabricación</a>
                     <a href="#" class="sb-subitem">Inventario</a>
                     
                 </div>

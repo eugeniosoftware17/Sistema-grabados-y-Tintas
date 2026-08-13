@@ -199,6 +199,12 @@ class OrdenFabricacion(models.Model):
     # ============================================================
     actualizado_el = models.DateTimeField(auto_now=True, verbose_name="Última Actualización")
     creado_el = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de Creación")
+    origen_manual = models.BooleanField(
+        default=False,
+        verbose_name="Alta manual (Fabricación)",
+        help_text="Se marca solo cuando el grabado se registró desde la pantalla temporal de "
+                   "Fabricación, en vez de venir de la programación de Plani."
+    )
 
     def __str__(self):
         return f"OF {self.of} - {self.cliente}"

@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Fabricación (Alta Manual) | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<style>
+    /* Estilos propios del formulario de alta manual (ver views_fabricacion.py) */
+    .campo-grupo { margin-bottom: 16px; }
+    .campo-grupo label { display: block; margin-bottom: 6px; font-weight: 600; color: #444; font-size: 13px; }
+    .fila-doble { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+    .fila-triple { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
+    .control-entrada {
+        width: 100%; padding: 9px 11px; border: 1px solid #ddd; border-radius: 8px;
+        font-size: 14px; transition: border-color 0.2s;
+    }
+    .control-entrada:focus { outline: none; border-color: #2d8a3e; box-shadow: 0 0 0 3px rgba(45,138,62,0.1); }
+    .aviso-externo {
+        font-size: 12px; padding: 8px 12px; border-radius: 8px; margin-bottom: 16px; display: none;
+    }
+    .aviso-externo--ok { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; }
+    .aviso-externo--vacio { background: #fff3e0; color: #e65100; border: 1px solid #ffe0b2; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+  <div class="tabla-contenedor">
+
+    <div class="tabla-cabecera">
+      <div class="tabla-cabecera__titulo">
+        <svg viewBox="0 0 24 24" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg>
+        Fabricación — Alta Manual de Grabados
+      </div>
+      <button class="boton boton--primario" onclick="abrirModalFabricacion()">+ Registrar Grabado</button>
+    </div>
+
+    <p style="padding: 0 18px 12px; font-size: 13px; color: #666;">
+        Registrá acá grabados que ya tenés guardados físicamente pero que no están en la programación de Plani.
+        Los datos técnicos de producción no se cargan desde esta pantalla. Una vez guardado, el grabado aparece
+        también en la <a href="{% url 'grabados:grabado_consulta' %}">Tabla de Consultas</a>.
+    </p>
+
+    <div class="tabla-area-datos">
+      <table class="tabla-registros" id="tabla-registros">
+        <thead>
+          <tr>
+            <th>OF</th>
+            <th>Proceso</th>
+            <th>Cliente</th>
+            <th>Descripción</th>
+            <th>Máquina</th>
+            <th>Sobre</th>
+            <th>OF Ref.</th>
+            <th>Papel</th>
+            <th>Ubicación</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody id="tabla-cuerpo-fabricacion">
+          <tr><td colspan="10" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- MODAL DE ALTA MANUAL -->
+  <div id="modal-fabricacion" class="overlay-moderno" style="display:none;">
+    <div class="dashboard-card" style="max-width: 560px;">
+        <div class="dashboard-cabecera">
+            <h3>Registrar Grabado Existente</h3>
+            <p>Datos generales y ubicación — sin datos técnicos de producción</p>
+        </div>
+        <div class="dashboard-cuerpo">
+            <div class="fila-doble">
+                <div class="campo-grupo">
+                    <label>Número de OF:</label>
+                    <input type="text" id="fab-of" class="control-entrada" placeholder="Ej: 22741">
+                </div>
+                <div class="campo-grupo">
+                    <label>Proceso:</label>
+                    <select id="fab-proceso" class="control-entrada">
+                        <option value="STAMPING">STAMPING</option>
+                        <option value="EMBOSSING">EMBOSSING</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="button" class="boton" style="margin-bottom: 16px;" onclick="buscarExterno()">
+                🔎 Buscar en Sistema Externo
+            </button>
+            <div id="fab-aviso-ok" class="aviso-externo aviso-externo--ok">Se encontraron datos para esta OF, revisá los campos.</div>
+            <div id="fab-aviso-vacio" class="aviso-externo aviso-externo--vacio">No se encontró esa OF en el sistema externo. Completá los campos a mano.</div>
+
+            <div class="fila-triple">
+                <div class="campo-grupo">
+                    <label>Máquina:</label>
+                    <input type="text" id="fab-maquina" class="control-entrada" placeholder="Ej: GIETZ 02">
+                </div>
+                <div class="campo-grupo">
+                    <label>Sobre:</label>
+                    <input type="text" id="fab-sobre" class="control-entrada">
+                </div>
+                <div class="campo-grupo">
+                    <label>OF Referencia:</label>
+                    <input type="text" id="fab-referencia" class="control-entrada">
+                </div>
+            </div>
+
+            <div class="campo-grupo">
+                <label>Papel:</label>
+                <input type="text" id="fab-papel" class="control-entrada">
+            </div>
+
+            <div class="fila-doble">
+                <div class="campo-grupo">
+                    <label>Cliente:</label>
+                    <input type="text" id="fab-cliente" class="control-entrada" placeholder="Puede quedar en blanco por ahora">
+                </div>
+                <div class="campo-grupo">
+                    <label>Ubicación Física:</label>
+                    <input type="text" id="fab-ubicacion" class="control-entrada" placeholder="Ej: Cajón A-10">
+                </div>
+            </div>
+
+            <div class="campo-grupo">
+                <label>Estado del Grabado:</label>
+                <select id="fab-estado" class="control-entrada">
+                    <option value="COMPLETADO" selected>Completado</option>
+                    <option value="PENDIENTE">Pendiente</option>
+                    <option value="EN_PROCESO">En Proceso</option>
+                    <option value="EN_MAQUINA">En Máquina</option>
+                    <option value="REVISION">En Revisión</option>
+                    <option value="REPETIR">Para Repetir</option>
+                    <option value="CANCELADO">Cancelado</option>
+                </select>
+            </div>
+
+            <div class="campo-grupo">
+                <label>Descripción:</label>
+                <textarea id="fab-descripcion" class="control-entrada" rows="2" placeholder="Puede quedar en blanco por ahora"></textarea>
+            </div>
+        </div>
+        <div class="dashboard-pie">
+            <button class="boton boton--cancelar" onclick="cerrarModalFabricacion()">Cancelar</button>
+            <button class="boton boton--guardar" id="fab-btn-guardar" onclick="guardarFabricacion()">Guardar</button>
+        </div>
+    </div>
+  </div>
+
+<script src="{% static 'js/fabricacion.js' %}"></script>
+{% endblock %}
