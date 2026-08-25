@@ -1,0 +1,372 @@
+================================================================================
+  INFORME DE AUDITORIA DE SEGURIDAD
+  Sistema EIS - Grabados y Tintas (Cigar Rings)
+================================================================================
+
+Fecha:           12 de agosto de 2026
+Rol del auditor: Probador de seguridad / auditor de codigo
+Alcance:         Aplicacion Django 6.0 (config/, apps/core/, apps/gestion_grabados/,
+                 frontend JS, configuracion de despliegue)
+Metodo:          Revision estatica del codigo, analisis de endpoints, configuracion
+                 y vectores OWASP Top 10
+
+
+================================================================================
+1. RESUMEN EJECUTIVO
+================================================================================
+
+El Sistema EIS es una aplicacion interna de trazabilidad de ordenes de fabricacion
+(STAMPING / EMBOSSING), pensada para uso en LAN con autenticacion por sesion Django.
+
+Nivel de riesgo global estimado: MEDIO-ALTO
+
++------------+----------+
+| Severidad  | Cantidad |
++------------+----------+
+| Critica    |    2     |
+| Alta       |    5     |
+| Media      |    7     |
+| Baja/Info  |    5     |
++------------+----------+
+
+VEREDICTO:
+La base de seguridad es razonable para una app interna (CSRF, login obligatorio,
+secretos fuera del codigo, eliminacion restringida a staff). Sin embargo, hay
+fallas explotables por CUALQUIER USUARIO AUTENTICADO, especialmente XSS almacenado
+y falta de control de acceso en las APIs de escritura.
+
+Desde la ultima revision, el proyecto incorpora 2FA con TOTP (django-otp), lo cual
+es una mejora, pero sigue siendo OPCIONAL y no corrige los problemas principales
+del frontend y las APIs.
+
+
+================================================================================
+2. LO QUE ESTA BIEN IMPLEMENTADO
+================================================================================
+
+[OK] Autenticacion por sesion
+     Todas las vistas de grabados usan @login_required
+
+[OK] Proteccion CSRF
+     Middleware activo; el JS envia X-CSRFToken en cada POST
+
+[OK] Sin @csrf_exempt
+     No hay endpoints de escritura abiertos a CSRF externo
+
+[OK] Secretos externalizados
+     SECRET_KEY, DB y rutas en .env
+
+[OK] .env no versionado
+     Esta en .gitignore y no aparece en el historial de git
+
+[OK] SQL parametrizado
+     Consulta a externa_2012 usa %s con parametros (bajo riesgo de inyeccion SQL)
+
+[OK] Eliminacion protegida
+     api_eliminar_registro exige request.user.is_staff
+
+[OK] Admin no estandar
+     Ruta /crdadmin/ en lugar de /admin/
+
+[OK] Sesiones con timeout
+     1 hora, expira al cerrar navegador, se renueva en cada peticion
+
+[OK] Validadores de contraseña
+     Los 4 validadores estandar de Django activos
+
+[OK] 2FA TOTP (nuevo)
+     RequireOTPMiddleware bloquea acceso si el usuario tiene TOTP configurado
+     y no verifico el codigo en la sesion actual
+
+
+================================================================================
+3. HALLAZGOS DETALLADOS
+================================================================================
+
+--------------------------------------------------------------------------------
+CRITICA
+--------------------------------------------------------------------------------
+
+[C-01] XSS (Cross-Site Scripting) almacenado via innerHTML
+--------------------------------------------------------------------------------
+Archivos:  apps/gestion_grabados/static/js/grabados_tabla.js
+           apps/gestion_grabados/static/js/plani_tabla.js
+CVSS est.:  8.7
+
+Descripcion:
+Los datos del servidor (cliente, descripcion, responsables, comentarios de dano,
+ubicacion, etc.) se insertan en el DOM con innerHTML SIN escapar HTML.
+
+La funcion resaltarTexto() solo escapa caracteres de regex, NO entidades HTML
+(<, >, ", ').
+
+Ejemplo del problema (grabados_tabla.js):
+  - reg.desc se inserta en title="${reg.desc}" y en innerHTML
+  - reg.of se inserta en onclick="window.verHistorial('${reg.of}')"
+
+Escenario de ataque:
+  1. Un operario registra un dano con comentario malicioso (HTML con onerror).
+  2. Cualquier usuario que abra la tabla de grabados ejecuta el script.
+  3. El atacante puede robar sesion, llamar APIs o exfiltrar registros.
+
+Impacto:  Robo de sesion, manipulacion de datos, escalada a admin si la victima
+          es is_staff.
+
+Recomendacion:
+  - Escapar HTML antes de insertar (textContent o funcion escapeHtml()).
+  - Nunca interpolar datos en atributos onclick/title.
+  - Para resaltado de busqueda: escapar primero, luego aplicar <mark>.
+
+
+[C-02] Configuracion de produccion insegura
+--------------------------------------------------------------------------------
+Archivos:  .env / config/settings.py
+
+Descripcion:
+  - En el entorno actual, DEBUG tiene un valor invalido ("flase" en lugar de
+    "false"), lo que impide arrancar Django correctamente.
+  - En auditorias del mismo entorno se detecto DEBUG=True en despliegue.
+  - SECRET_KEY debil (menos de 50 caracteres o pocos caracteres unicos).
+
+Con DEBUG=True, cualquier error no controlado expone stack trace, rutas de
+archivos, consultas SQL y variables de entorno.
+
+Impacto:  Exposicion total de la aplicacion; posible falsificacion de sesiones.
+
+Recomendacion inmediata en .env:
+  DEBUG=False
+  SECRET_KEY=<cadena aleatoria de 50+ caracteres>
+  ALLOWED_HOSTS=hostname-del-servidor
+
+
+--------------------------------------------------------------------------------
+ALTA
+--------------------------------------------------------------------------------
+
+[A-01] IDOR: cualquier usuario puede modificar cualquier OF
+--------------------------------------------------------------------------------
+Archivo:  apps/gestion_grabados/views.py -> api_registrar_actividad
+
+Descripcion:
+Cualquier usuario autenticado puede enviar POST con cualquier "of" y "proceso"
+y alterar estado, pesos, ubicacion, descripcion, etc.
+
+No hay:
+  - Verificacion de rol (operario vs supervisor)
+  - Verificacion de propiedad del registro
+  - Validacion de transiciones de estado validas
+
+Escenario:
+  Operario A marca como COMPLETADO una OF de EMBOSSING que no le corresponde,
+  o altera pesos/temperaturas de auditoria.
+
+Recomendacion:
+  Decorador de permisos por rol; validar que tipo_registro sea coherente con
+  el estado actual del objeto.
+
+
+[A-02] Subida de archivos sin validacion (foto_dano)
+--------------------------------------------------------------------------------
+Archivo:  apps/gestion_grabados/views.py (lineas 404-405)
+
+Descripcion:
+  if 'foto_dano' in request.FILES:
+      obj.foto_dano = request.FILES['foto_dano']
+
+No hay validacion de:
+  - Tipo MIME / extension (solo imagenes)
+  - Tamano maximo
+  - Verificacion con Pillow de que el contenido es imagen real
+
+Ademas, MEDIA_URL y MEDIA_ROOT NO estan configurados en settings.py.
+
+Escenario:
+  Subida de .svg con JavaScript, archivo enorme (DoS de disco), o archivo
+  malicioso renombrado.
+
+Recomendacion:
+  Solo JPEG/PNG/WebP, maximo 5 MB, verificar con Pillow antes de guardar.
+
+
+[A-03] Sin hardening HTTPS / cookies seguras
+--------------------------------------------------------------------------------
+Archivo:  config/settings.py
+
+No configurado:
+  - SECURE_SSL_REDIRECT
+  - SECURE_HSTS_SECONDS
+  - SESSION_COOKIE_SECURE
+  - CSRF_COOKIE_SECURE
+  - Content-Security-Policy
+
+Escenario:
+  En LAN, un atacante con acceso a la red captura cookies de sesion en HTTP.
+
+
+[A-04] Escritura masiva sin control de rol
+--------------------------------------------------------------------------------
+Archivo:  apps/gestion_grabados/views.py -> confirmar_sincronizacion
+
+Descripcion:
+Endpoint activo con @login_required pero SIN verificacion de is_staff.
+Cualquier usuario autenticado puede hacer update_or_create masivo via POST
+directo (curl/Postman), aunque el JS actual no lo use.
+
+Tambien usa el campo 'responsable' que NO existe en el modelo (deberia ser
+'responsables').
+
+Recomendacion:
+  Restringir a is_staff o eliminar el endpoint si no se usa.
+
+
+[A-05] 2FA opcional: la mayoria de usuarios no esta protegida
+--------------------------------------------------------------------------------
+Archivo:  apps/core/middleware.py
+
+Descripcion:
+El middleware solo exige OTP si el usuario tiene un TOTPDevice confirmado.
+Los usuarios sin 2FA configurado entran SOLO con contrasena.
+
+Escenario:
+  Cuenta de operario comprometida por fuerza bruta -> acceso total sin
+  segundo factor.
+
+Recomendacion:
+  Hacer 2FA obligatorio para todos los usuarios, o al menos para is_staff.
+
+
+--------------------------------------------------------------------------------
+MEDIA
+--------------------------------------------------------------------------------
+
+[M-01] Divulgacion de informacion en errores API
+  Varios endpoints devuelven str(e) al cliente en errores 500.
+  Recomendacion: log interno + mensaje generico al usuario.
+
+[M-02] Sin rate limiting en login ni verificacion OTP
+  No hay proteccion contra fuerza bruta en /login/ ni /verificar-2fa/.
+  Codigos TOTP de 6 digitos son brute-forceables sin lockout.
+
+[M-03] TrustServerCertificate=yes en SQL Server
+  Desactiva validacion del certificado TLS. Riesgo MITM en conexion a DB.
+
+[M-04] CORS middleware instalado sin configuracion
+  corsheaders activo pero sin CORS_ALLOWED_ORIGINS. Riesgo de mala config futura.
+
+[M-05] Exposicion de todos los datos a cualquier usuario autenticado
+  api_obtener_registros, api_estadisticas_detalladas, api_historial_orden
+  no segregan por departamento, maquina o rol.
+
+[M-06] Inyeccion en atributos HTML/JS
+  reg.of, reg.proceso, reg.desc en onclick="..." y title="..." sin escapar.
+
+[M-07] Clave TOTP expuesta en mensaje flash del admin
+  apps/core/admin.py muestra la clave secreta Base32 al crear dispositivo TOTP.
+
+
+--------------------------------------------------------------------------------
+BAJA / INFORMATIVA
+--------------------------------------------------------------------------------
+
+[B-01] Checkbox "Recordarme" no funcional (no extiende sesion)
+[B-02] Scripts de debug en raiz (explore_db.py, seed_db.py) acceden a DB
+[B-03] Sin Content-Security-Policy
+[B-04] print() en produccion en buscar_datos_externos()
+[B-05] Sin auditoria detallada de cambios (solo campo usuario en registro)
+
+
+================================================================================
+4. MAPA DE SUPERFICIE DE ATAQUE
+================================================================================
+
+                    Atacante (LAN / interno)
+                              |
+         +--------------------+--------------------+
+         |                    |                    |
+   Fuerza bruta          Usuario auth         XSS almacenado
+   login / OTP                 |                    |
+         |                    v                    v
+         v             IDOR: modificar         Robo sesion
+   Sesion robada       cualquier OF                 |
+   (HTTP sin TLS)            |                      v
+         |                   v               Admin / APIs
+         +---------> Escalada de privilegios <-----+
+
+
+================================================================================
+5. MATRIZ DE PRIORIZACION
+================================================================================
+
+Prioridad | Hallazgo                        | Esfuerzo | Impacto
+----------|----------------------------------|----------|--------
+    1     | C-01 XSS en innerHTML            | Medio    | Critico
+    2     | C-02 DEBUG / SECRET_KEY          | Bajo     | Critico
+    3     | A-01 IDOR en api_registrar       | Medio    | Alto
+    4     | A-02 Validacion de uploads       | Bajo     | Alto
+    5     | A-03 HTTPS + cookies seguras     | Bajo     | Alto
+    6     | A-04 Proteger confirmar_sync     | Bajo     | Alto
+    7     | M-02 Rate limiting login/OTP     | Medio    | Medio
+    8     | A-05 2FA obligatorio para staff  | Medio    | Alto
+
+
+================================================================================
+6. PLAN DE REMEDIACION RECOMENDADO
+================================================================================
+
+ESTA SEMANA (urgente):
+  1. Corregir .env: DEBUG=False, SECRET_KEY fuerte, ALLOWED_HOSTS correcto
+  2. Escapar HTML en todo el JS que use innerHTML con datos del servidor
+  3. Validar uploads: solo JPEG/PNG/WebP, max 5 MB, verificacion con Pillow
+  4. Restringir confirmar_sincronizacion a is_staff o eliminarlo
+
+PROXIMAS 2-4 SEMANAS:
+  5. Autorizacion por rol en api_registrar_actividad
+  6. Rate limiting con django-axes o en IIS/nginx
+  7. Configurar HTTPS y cookies seguras en produccion
+  8. 2FA obligatorio para usuarios is_staff
+  9. Mensajes de error genericos al cliente; log interno con logging
+
+MEDIANO PLAZO:
+  10. Content-Security-Policy
+  11. Auditoria de cambios por OF
+  12. Tests automatizados de seguridad (CSRF, auth, XSS, uploads)
+
+
+================================================================================
+7. CHECKLIST DE VERIFICACION POST-CORRECCION
+================================================================================
+
+[ ] python manage.py check --deploy sin warnings criticos
+[ ] XSS con <script>alert(1)</script> en comentario de dano -> no ejecuta
+[ ] Operario no puede modificar OF fuera de su flujo permitido
+[ ] Subir .exe o .html como foto -> rechazado
+[ ] Login bloqueado tras N intentos fallidos
+[ ] Errores 500 no muestran stack trace al cliente
+[ ] Cookies solo por HTTPS en produccion
+[ ] Staff requiere 2FA para acceder
+
+
+================================================================================
+8. CONCLUSION
+================================================================================
+
+El sistema tiene una base solida para uso interno, especialmente tras agregar
+2FA con TOTP. Los controles de CSRF, autenticacion y secretos externalizados
+estan bien.
+
+Las vulnerabilidades mas graves y explotables hoy son:
+
+  1. XSS almacenado en las tablas JS (afecta a todos los usuarios autenticados)
+  2. IDOR en la API de registro de actividad (cualquier operario puede alterar
+     cualquier OF)
+  3. Configuracion de produccion (DEBUG, clave secreta, HTTPS)
+
+Para una app de planta en LAN con usuarios de confianza el riesgo operativo es
+menor que en internet, pero un empleado malintencionado o una cuenta
+comprometida puede explotar XSS e IDOR sin acceso tecnico avanzado.
+
+
+================================================================================
+  Fin del informe
+  Generado: 12 de agosto de 2026
+================================================================================
