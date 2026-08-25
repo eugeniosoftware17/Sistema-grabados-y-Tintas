@@ -169,3 +169,13 @@ SESSION_SAVE_EVERY_REQUEST = True
 
 # Ruta para el archivo de Programación (definida en .env)
 PLANI_EXCEL_PATH = config('PLANI_EXCEL_PATH')
+
+# Fuente de datos técnicos externos (STAMPING/EMBOSSING): 'db' consulta la base
+# externa_2012 por SQL directo, 'api' llama a la FileMaker Data API (o su mock local
+# en api_simulada.py) vía FM_URL. Ver buscar_datos_externos() en gestion_grabados/views.py.
+EXTERNA_2012_SOURCE = config('EXTERNA_2012_SOURCE', default='db')
+FM_URL = config('FM_URL', default='')
+FM_HOST_NAME = config('FM_HOST_NAME', default='')
+FM_DSN = config('FM_DSN', default='')
+FM_USER = config('FM_USER', default='')
+FM_PASSWORD = config('FM_PASSWORD', default='')

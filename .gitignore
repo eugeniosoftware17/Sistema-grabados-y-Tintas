@@ -13,6 +13,9 @@ ENV/
 .env
 CLAUDE.md
 
+# Mock local de la FileMaker Data API (solo desarrollo, no producción)
+api_simulada.py
+
 # IDEs
 .vscode/
 .idea/

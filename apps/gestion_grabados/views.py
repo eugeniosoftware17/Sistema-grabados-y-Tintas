@@ -3,6 +3,8 @@ import json
 import os
 import re
 import io
+import requests
+import urllib3
 from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
@@ -10,59 +12,114 @@ from django.contrib.auth.decorators import login_required
 from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
 
+# La FileMaker Data API (CRDAPS10) usa un certificado autofirmado; se acepta el
+# mismo riesgo de MITM en LAN que ya asume la conexión a SQL Server (TrustServerCertificate=yes).
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Nombre de campo en la tabla local (CigarRings2012) -> nombre de campo tal como lo
+# expone la FileMaker Data API (tabla "cigar rings FP10", con espacios en vez de "_").
+FIELD_MAP_FILEMAKER = {
+    'G_orden': 'G_orden',
+    'OF_Stamping': 'OF Stamping',
+    'OF_Embossing': 'OF Embossing',
+    'Acabat_Stamping': 'Acabat Stamping',
+    'Acabat_Embossing': 'Acabat Embossing',
+    'Sobre_pelicula': 'Sobre pelicula',
+    'PRO_stamping_Maquina': 'PRO stamping Maquina',
+    'PRO_Embossing': 'PRO Embossing',
+    'G_Papel_Fabricante_2012': 'G Papel Fabricante 2012',
+    'Prev_Horas_Stamping': 'Prev Horas Stamping',
+}
+
+
+def _buscar_fila_db(of_int, columnas):
+    """Consulta CigarRings2012 en externa_2012 por SQL directo. Devuelve la fila o None."""
+    with connections['externa_2012'].cursor() as cursor:
+        query = f"SELECT {', '.join(columnas)} FROM CigarRings2012 WHERE G_orden = %s"
+        cursor.execute(query, [of_int])
+        return cursor.fetchone()
+
+
+def _buscar_fila_api(of_int, columnas):
+    """Consulta la FileMaker Data API (o su mock local, ver api_simulada.py) por HTTP.
+    Devuelve la fila en el mismo orden que `columnas` o None."""
+    columnas_fm = [FIELD_MAP_FILEMAKER.get(c, c) for c in columnas]
+    select_clause = ', '.join(f'"{c}"' for c in columnas_fm)
+    query = f'SELECT {select_clause} FROM "cigar rings FP10" WHERE "G_orden" = {of_int}'
+    payload = {
+        'connection': {
+            'host': settings.FM_HOST_NAME,
+            'dsn': settings.FM_DSN,
+            'uid': settings.FM_USER,
+            'pwd': settings.FM_PASSWORD,
+        },
+        'query': query,
+    }
+    resp = requests.post(settings.FM_URL, json=payload, verify=False, timeout=10)
+    resp.raise_for_status()
+    filas = resp.json()
+    if not filas:
+        return None
+    fila = filas[0]
+    return [fila.get(campo_fm) for campo_fm in columnas_fm]
+
+
 def buscar_datos_externos(of_numero, proceso):
-    """Busca información técnica en la base de datos CigarRings2012 usando G_orden"""
+    """Busca información técnica de STAMPING/EMBOSSING usando G_orden.
+    Origen configurable por settings.EXTERNA_2012_SOURCE: 'db' (SQL directo a
+    externa_2012) o 'api' (FileMaker Data API / mock local)."""
+    vacio = {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
     try:
         # Normalizar OF para búsqueda numérica: "22651.0" -> "22651"
         of_str = str(of_numero).strip()
         if '.' in of_str:
             of_str = of_str.split('.')[0]
         of_limpia = re.sub(r'\D', '', of_str)
-        
+
         if not of_limpia:
-            return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
+            return vacio
 
         of_int = int(of_limpia)
 
-        with connections['externa_2012'].cursor() as cursor:
-            if proceso == 'STAMPING':
-                col_maq = 'PRO_stamping_Maquina'
-                col_of_ref = 'OF_Stamping'
-                col_acabado = 'Acabat_Stamping'
-                col_horas = 'Prev_Horas_Stamping'
+        if proceso == 'STAMPING':
+            col_maq = 'PRO_stamping_Maquina'
+            col_of_ref = 'OF_Stamping'
+            col_acabado = 'Acabat_Stamping'
+            col_horas = 'Prev_Horas_Stamping'
+        else:
+            col_maq = 'PRO_Embossing'
+            col_of_ref = 'OF_Embossing'
+            col_acabado = 'Acabat_Embossing'
+            col_horas = None  # No existe columna de horas previstas para Embossing
+
+        columnas = [col_maq, 'Sobre_pelicula', col_of_ref, col_acabado, 'G_Papel_Fabricante_2012']
+        if col_horas:
+            columnas.append(col_horas)
+
+        if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
+            row = _buscar_fila_api(of_int, columnas)
+        else:
+            row = _buscar_fila_db(of_int, columnas)
+
+        if row:
+            val_acabado = str(row[3]).strip() if row[3] is not None else '0'
+            if val_acabado.lower() in ['true', '1', '1.0', 'ok', 's', 'y']:
+                val_acabado = '1'
             else:
-                col_maq = 'PRO_Embossing'
-                col_of_ref = 'OF_Embossing'
-                col_acabado = 'Acabat_Embossing'
-                col_horas = None  # No existe columna de horas previstas para Embossing
+                val_acabado = '0'
 
-            columnas = f"{col_maq}, Sobre_pelicula, {col_of_ref}, {col_acabado}, G_Papel_Fabricante_2012"
-            if col_horas:
-                columnas += f", {col_horas}"
-
-            query = f"SELECT {columnas} FROM CigarRings2012 WHERE G_orden = %s"
-            cursor.execute(query, [of_int])
-            row = cursor.fetchone()
-
-            if row:
-                val_acabado = str(row[3]).strip() if row[3] is not None else '0'
-                if val_acabado.lower() in ['true', '1', '1.0', 'ok', 's', 'y']:
-                    val_acabado = '1'
-                else:
-                    val_acabado = '0'
-
-                return {
-                    'maquina_ext': row[0] if row[0] else '—',
-                    'sobre_ext': row[1] if row[1] else '—',
-                    'ref_ext': row[2] if row[2] else '—',
-                    'acabado_ext': val_acabado,
-                    'papel_ext': row[4] if row[4] else '—',
-                    'horas_ext': row[5] if col_horas and row[5] is not None else None,
-                    'encontrado_ext': True
-                }
+            return {
+                'maquina_ext': row[0] if row[0] else '—',
+                'sobre_ext': row[1] if row[1] else '—',
+                'ref_ext': row[2] if row[2] else '—',
+                'acabado_ext': val_acabado,
+                'papel_ext': row[4] if row[4] else '—',
+                'horas_ext': row[5] if col_horas and row[5] is not None else None,
+                'encontrado_ext': True
+            }
     except Exception as e:
-        print(f"Error consultando DB externa para OF {of_numero}: {e}")
-    return {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
+        print(f"Error consultando datos externos para OF {of_numero}: {e}")
+    return vacio
 
 @login_required
 def grabado_consulta(request):
