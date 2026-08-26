@@ -80,6 +80,12 @@
                 if (d.encontrado_ext) {
                     document.getElementById('fab-sobre').value = d.sobre_ext !== '—' ? d.sobre_ext : '';
                     document.getElementById('fab-referencia').value = d.ref_ext !== '—' ? d.ref_ext : '';
+                    if (d.cliente_ext && d.cliente_ext !== '—') {
+                        document.getElementById('fab-cliente').value = d.cliente_ext;
+                    }
+                    if (d.descripcion_ext && d.descripcion_ext !== '—') {
+                        document.getElementById('fab-descripcion').value = d.descripcion_ext;
+                    }
                     document.getElementById('fab-aviso-ok').style.display = 'block';
                 } else {
                     document.getElementById('fab-aviso-vacio').style.display = 'block';

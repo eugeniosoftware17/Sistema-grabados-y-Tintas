@@ -25,6 +25,8 @@ FIELD_MAP_FILEMAKER = {
     'Acabat_Stamping': 'Acabat Stamping',
     'Acabat_Embossing': 'Acabat Embossing',
     'Sobre_pelicula': 'Sobre pelicula',
+    'G_Cliente': 'G_Cliente',
+    'G_Referencia': 'G_Referencia',
 }
 
 
@@ -64,7 +66,7 @@ def buscar_datos_externos(of_numero, proceso):
     """Busca información técnica de STAMPING/EMBOSSING usando G_orden.
     Origen configurable por settings.EXTERNA_2012_SOURCE: 'db' (SQL directo a
     externa_2012) o 'api' (FileMaker Data API / mock local)."""
-    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'proceso_ext': None}
+    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'proceso_ext': None, 'cliente_ext': '—', 'descripcion_ext': '—'}
     try:
         # Normalizar OF para búsqueda numérica: "22651.0" -> "22651"
         of_str = str(of_numero).strip()
@@ -86,7 +88,7 @@ def buscar_datos_externos(of_numero, proceso):
 
         # Se piden ambas columnas OF_* (no solo la del proceso pedido) para poder
         # inferir a qué proceso pertenece realmente la orden (ver proceso_ext más abajo).
-        columnas = ['Sobre_pelicula', 'OF_Stamping', 'OF_Embossing', col_acabado]
+        columnas = ['Sobre_pelicula', 'OF_Stamping', 'OF_Embossing', col_acabado, 'G_Cliente', 'G_Referencia']
 
         if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
             row = _buscar_fila_api(of_int, columnas)
@@ -120,6 +122,8 @@ def buscar_datos_externos(of_numero, proceso):
                 'ref_ext': ref if ref else '—',
                 'acabado_ext': val_acabado,
                 'proceso_ext': proceso_ext,
+                'cliente_ext': row[4] if row[4] else '—',
+                'descripcion_ext': row[5] if row[5] else '—',
                 'encontrado_ext': True
             }
     except Exception as e:
