@@ -30,6 +30,8 @@
     function ocultarAvisos() {
         document.getElementById('fab-aviso-ok').style.display = 'none';
         document.getElementById('fab-aviso-vacio').style.display = 'none';
+        document.getElementById('fab-aviso-doble-proceso').style.display = 'none';
+        document.getElementById('fab-proceso').classList.remove('control-entrada--advertencia');
     }
 
     window.abrirModalFabricacion = function () {
@@ -86,6 +88,16 @@
                     if (d.descripcion_ext && d.descripcion_ext !== '—') {
                         document.getElementById('fab-descripcion').value = d.descripcion_ext;
                     }
+
+                    // Si la orden tiene datos para los dos procesos, no se puede saber
+                    // cuál corresponde: se avisa para que el usuario elija a mano.
+                    const tieneStamping = d.of_stamping_ext && d.of_stamping_ext !== '—';
+                    const tieneEmbossing = d.of_embossing_ext && d.of_embossing_ext !== '—';
+                    if (tieneStamping && tieneEmbossing) {
+                        document.getElementById('fab-aviso-doble-proceso').style.display = 'block';
+                        document.getElementById('fab-proceso').classList.add('control-entrada--advertencia');
+                    }
+
                     document.getElementById('fab-aviso-ok').style.display = 'block';
                 } else {
                     document.getElementById('fab-aviso-vacio').style.display = 'block';
