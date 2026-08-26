@@ -39,6 +39,12 @@ def api_buscar_externo(request):
         return JsonResponse({'status': 'error', 'message': 'Faltan OF o proceso'}, status=400)
 
     info = buscar_datos_externos(of_numero, proceso)
+
+    # Misma normalización que usa api_registrar_manual al guardar, para poder
+    # avisar si esta OF+proceso ya está cargada en el sistema (evita pisarla sin querer).
+    if OrdenFabricacion.objects.filter(of=of_numero.upper(), proceso=proceso).exists():
+        info['status_db'] = 'existente'
+
     return JsonResponse({'status': 'ok', 'data': info})
 
 

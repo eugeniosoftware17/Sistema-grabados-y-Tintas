@@ -42,7 +42,7 @@
         document.getElementById('modal-fabricacion').style.display = 'none';
     };
 
-    window.buscarExterno = function () {
+    window.buscarExterno = function (reintento) {
         const of = document.getElementById('fab-of').value.trim();
         const proceso = document.getElementById('fab-proceso').value;
         if (!of) { alert('Ingresá un número de OF primero.'); return; }
@@ -54,6 +54,29 @@
             .then(res => {
                 if (res.status !== 'ok') { alert('Error: ' + res.message); return; }
                 const d = res.data;
+                if (d.encontrado_ext) {
+                    // Si el sistema externo indica que la orden es del otro proceso,
+                    // se ajusta el select y se repite la búsqueda una sola vez para
+                    // traer ref_ext/acabado_ext (y el status_db) del proceso correcto.
+                    const procesoDetectado = (d.proceso_ext === 'STAMPING' || d.proceso_ext === 'EMBOSSING') ? d.proceso_ext : null;
+                    if (procesoDetectado && procesoDetectado !== proceso && !reintento) {
+                        document.getElementById('fab-proceso').value = procesoDetectado;
+                        window.buscarExterno(true);
+                        return;
+                    }
+                    if (procesoDetectado) {
+                        document.getElementById('fab-proceso').value = procesoDetectado;
+                    }
+                }
+
+                if (d.status_db === 'existente') {
+                    const continuar = confirm('Esta OF ya está registrada en el sistema. ¿Deseas continuar de todas formas?');
+                    if (!continuar) {
+                        limpiarFormulario();
+                        return;
+                    }
+                }
+
                 if (d.encontrado_ext) {
                     document.getElementById('fab-sobre').value = d.sobre_ext !== '—' ? d.sobre_ext : '';
                     document.getElementById('fab-referencia').value = d.ref_ext !== '—' ? d.ref_ext : '';
@@ -68,10 +91,23 @@
     function renderTabla() {
         const tbody = document.getElementById('tabla-cuerpo-fabricacion');
         if (!registrosSesion.length) {
-            tbody.innerHTML = '<tr><td colspan="10" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>';
             return;
         }
-        tbody.innerHTML = registrosSesion.map(r => `
+        tbody.innerHTML = registrosSesion.map((r, idx) => {
+            let htmlAcciones = `<div class="fila-acciones">
+                <button class="boton-accion boton-accion--editar-azul" onclick="window.editarRegistroFabricacion(${idx})" title="Editar">
+                    <svg viewBox="0 0 24 24" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                </button>`;
+            if (window.USER_IS_ADMIN === true) {
+                htmlAcciones += `
+                <button class="boton-accion boton-accion--eliminar" onclick="window.eliminarRegistroFabricacion(${idx})" title="Eliminar">
+                    <svg viewBox="0 0 24 24" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                </button>`;
+            }
+            htmlAcciones += `</div>`;
+
+            return `
             <tr>
                 <td><strong>${r.of}</strong></td>
                 <td>${r.proceso}</td>
@@ -83,9 +119,53 @@
                 <td>${r.papel || '—'}</td>
                 <td>${r.ubicacion || '—'}</td>
                 <td>${ESTADOS[r.estado] || r.estado}</td>
+                <td>${htmlAcciones}</td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
     }
+
+    window.editarRegistroFabricacion = function (idx) {
+        const reg = registrosSesion[idx];
+        if (!reg) return;
+        ocultarAvisos();
+        document.getElementById('fab-of').value = reg.of || '';
+        document.getElementById('fab-proceso').value = reg.proceso || 'STAMPING';
+        document.getElementById('fab-maquina').value = reg.maquina || '';
+        document.getElementById('fab-sobre').value = reg.sobre || '';
+        document.getElementById('fab-referencia').value = reg.referencia || '';
+        document.getElementById('fab-papel').value = reg.papel || '';
+        document.getElementById('fab-cliente').value = reg.cliente || '';
+        document.getElementById('fab-ubicacion').value = reg.ubicacion || '';
+        document.getElementById('fab-descripcion').value = (reg.descripcion && reg.descripcion !== '—') ? reg.descripcion : '';
+        document.getElementById('fab-estado').value = reg.estado || 'COMPLETADO';
+        document.getElementById('modal-fabricacion').style.display = 'flex';
+    };
+
+    window.eliminarRegistroFabricacion = function (idx) {
+        const reg = registrosSesion[idx];
+        if (!reg) return;
+        if (!confirm(`¿Estás seguro que deseas eliminar la OF ${reg.of}?`)) return;
+
+        fetch('/grabados/api/eliminar/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ of: reg.of, proceso: reg.proceso }),
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status === 'ok') {
+                    registrosSesion.splice(idx, 1);
+                    renderTabla();
+                } else {
+                    alert('Error: ' + res.message);
+                }
+            })
+            .catch(() => alert('Error de conexión al eliminar.'));
+    };
 
     window.guardarFabricacion = function () {
         const of = document.getElementById('fab-of').value.trim();
@@ -119,7 +199,14 @@
             .then(r => r.json())
             .then(res => {
                 if (res.status === 'ok') {
-                    registrosSesion.unshift(payload);
+                    // Si ya existía en la tabla de esta sesión (edición), se reemplaza
+                    // en el mismo lugar en vez de agregar una fila duplicada.
+                    const idxExistente = registrosSesion.findIndex(r => r.of === payload.of && r.proceso === payload.proceso);
+                    if (idxExistente >= 0) {
+                        registrosSesion[idxExistente] = payload;
+                    } else {
+                        registrosSesion.unshift(payload);
+                    }
                     renderTabla();
                     cerrarModalFabricacion();
                 } else {

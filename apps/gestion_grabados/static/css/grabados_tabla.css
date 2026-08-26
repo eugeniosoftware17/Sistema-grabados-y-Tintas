@@ -638,6 +638,16 @@
       background: var(--color-verde-claro);
     }
 
+    /* Variante: Editar azul (fabricacion.html — precarga el formulario) */
+    .boton-accion--editar-azul {
+      border-color: #b8d4f7;
+      color       : #1a5fa8;
+    }
+
+    .boton-accion--editar-azul:hover {
+      background: #e8f1fd;
+    }
+
     /* Variante: Eliminar (rojo) */
     .boton-accion--eliminar {
       border-color: #f5c6c6;

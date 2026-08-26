@@ -64,7 +64,7 @@ def buscar_datos_externos(of_numero, proceso):
     """Busca información técnica de STAMPING/EMBOSSING usando G_orden.
     Origen configurable por settings.EXTERNA_2012_SOURCE: 'db' (SQL directo a
     externa_2012) o 'api' (FileMaker Data API / mock local)."""
-    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0'}
+    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'proceso_ext': None}
     try:
         # Normalizar OF para búsqueda numérica: "22651.0" -> "22651"
         of_str = str(of_numero).strip()
@@ -84,7 +84,9 @@ def buscar_datos_externos(of_numero, proceso):
             col_of_ref = 'OF_Embossing'
             col_acabado = 'Acabat_Embossing'
 
-        columnas = ['Sobre_pelicula', col_of_ref, col_acabado]
+        # Se piden ambas columnas OF_* (no solo la del proceso pedido) para poder
+        # inferir a qué proceso pertenece realmente la orden (ver proceso_ext más abajo).
+        columnas = ['Sobre_pelicula', 'OF_Stamping', 'OF_Embossing', col_acabado]
 
         if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
             row = _buscar_fila_api(of_int, columnas)
@@ -92,16 +94,32 @@ def buscar_datos_externos(of_numero, proceso):
             row = _buscar_fila_db(of_int, columnas)
 
         if row:
-            val_acabado = str(row[2]).strip().lower() if row[2] is not None else '0'
+            val_acabado = str(row[3]).strip().lower() if row[3] is not None else '0'
             if val_acabado in ['si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y']:
                 val_acabado = '1'
             else:
                 val_acabado = '0'
 
+            def tiene_valor(v):
+                return v is not None and str(v).strip() not in ('', '—')
+
+            tiene_stamping = tiene_valor(row[1])
+            tiene_embossing = tiene_valor(row[2])
+            if tiene_stamping and not tiene_embossing:
+                proceso_ext = 'STAMPING'
+            elif tiene_embossing and not tiene_stamping:
+                proceso_ext = 'EMBOSSING'
+            else:
+                # Ambos u ninguno poblados: no se puede inferir un único proceso.
+                proceso_ext = None
+
+            ref = row[1] if proceso == 'STAMPING' else row[2]
+
             return {
                 'sobre_ext': row[0] if row[0] else '—',
-                'ref_ext': row[1] if row[1] else '—',
+                'ref_ext': ref if ref else '—',
                 'acabado_ext': val_acabado,
+                'proceso_ext': proceso_ext,
                 'encontrado_ext': True
             }
     except Exception as e:

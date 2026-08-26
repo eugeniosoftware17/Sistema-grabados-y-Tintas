@@ -56,10 +56,11 @@
             <th>Papel</th>
             <th>Ubicación</th>
             <th>Estado</th>
+            <th>Acciones</th>
           </tr>
         </thead>
         <tbody id="tabla-cuerpo-fabricacion">
-          <tr><td colspan="10" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>
+          <tr><td colspan="11" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>
         </tbody>
       </table>
     </div>
@@ -150,5 +151,8 @@
     </div>
   </div>
 
+<script>
+  window.USER_IS_ADMIN = {{ user.is_staff|yesno:"true,false" }};
+</script>
 <script src="{% static 'js/fabricacion.js' %}"></script>
 {% endblock %}
