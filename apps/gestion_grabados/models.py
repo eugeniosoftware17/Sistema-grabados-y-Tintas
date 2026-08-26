@@ -210,7 +210,7 @@ class OrdenFabricacion(models.Model):
         default=False,
         verbose_name="Alta manual (Fabricación)",
         help_text="Se marca solo cuando el grabado se registró desde la pantalla temporal de "
-                   "Fabricación, en vez de venir de la programación de Plani."
+                   "Fabricación, en vez de venir de la programación de Planning."
     )
 
     def __str__(self):
