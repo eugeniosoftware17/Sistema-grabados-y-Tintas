@@ -55,10 +55,8 @@
                 if (res.status !== 'ok') { alert('Error: ' + res.message); return; }
                 const d = res.data;
                 if (d.encontrado_ext) {
-                    document.getElementById('fab-maquina').value = d.maquina_ext !== '—' ? d.maquina_ext : '';
                     document.getElementById('fab-sobre').value = d.sobre_ext !== '—' ? d.sobre_ext : '';
                     document.getElementById('fab-referencia').value = d.ref_ext !== '—' ? d.ref_ext : '';
-                    document.getElementById('fab-papel').value = d.papel_ext !== '—' ? d.papel_ext : '';
                     document.getElementById('fab-aviso-ok').style.display = 'block';
                 } else {
                     document.getElementById('fab-aviso-vacio').style.display = 'block';

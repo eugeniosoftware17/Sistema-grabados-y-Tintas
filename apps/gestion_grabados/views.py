@@ -25,10 +25,6 @@ FIELD_MAP_FILEMAKER = {
     'Acabat_Stamping': 'Acabat Stamping',
     'Acabat_Embossing': 'Acabat Embossing',
     'Sobre_pelicula': 'Sobre pelicula',
-    'PRO_stamping_Maquina': 'PRO stamping Maquina',
-    'PRO_Embossing': 'PRO Embossing',
-    'G_Papel_Fabricante_2012': 'G Papel Fabricante 2012',
-    'Prev_Horas_Stamping': 'Prev Horas Stamping',
 }
 
 
@@ -68,7 +64,7 @@ def buscar_datos_externos(of_numero, proceso):
     """Busca información técnica de STAMPING/EMBOSSING usando G_orden.
     Origen configurable por settings.EXTERNA_2012_SOURCE: 'db' (SQL directo a
     externa_2012) o 'api' (FileMaker Data API / mock local)."""
-    vacio = {'encontrado_ext': False, 'maquina_ext': '—', 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'papel_ext': '—', 'horas_ext': None}
+    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0'}
     try:
         # Normalizar OF para búsqueda numérica: "22651.0" -> "22651"
         of_str = str(of_numero).strip()
@@ -82,19 +78,13 @@ def buscar_datos_externos(of_numero, proceso):
         of_int = int(of_limpia)
 
         if proceso == 'STAMPING':
-            col_maq = 'PRO_stamping_Maquina'
             col_of_ref = 'OF_Stamping'
             col_acabado = 'Acabat_Stamping'
-            col_horas = 'Prev_Horas_Stamping'
         else:
-            col_maq = 'PRO_Embossing'
             col_of_ref = 'OF_Embossing'
             col_acabado = 'Acabat_Embossing'
-            col_horas = None  # No existe columna de horas previstas para Embossing
 
-        columnas = [col_maq, 'Sobre_pelicula', col_of_ref, col_acabado, 'G_Papel_Fabricante_2012']
-        if col_horas:
-            columnas.append(col_horas)
+        columnas = ['Sobre_pelicula', col_of_ref, col_acabado]
 
         if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
             row = _buscar_fila_api(of_int, columnas)
@@ -102,19 +92,16 @@ def buscar_datos_externos(of_numero, proceso):
             row = _buscar_fila_db(of_int, columnas)
 
         if row:
-            val_acabado = str(row[3]).strip() if row[3] is not None else '0'
-            if val_acabado.lower() in ['true', '1', '1.0', 'ok', 's', 'y']:
+            val_acabado = str(row[2]).strip().lower() if row[2] is not None else '0'
+            if val_acabado in ['si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y']:
                 val_acabado = '1'
             else:
                 val_acabado = '0'
 
             return {
-                'maquina_ext': row[0] if row[0] else '—',
-                'sobre_ext': row[1] if row[1] else '—',
-                'ref_ext': row[2] if row[2] else '—',
+                'sobre_ext': row[0] if row[0] else '—',
+                'ref_ext': row[1] if row[1] else '—',
                 'acabado_ext': val_acabado,
-                'papel_ext': row[4] if row[4] else '—',
-                'horas_ext': row[5] if col_horas and row[5] is not None else None,
                 'encontrado_ext': True
             }
     except Exception as e:
