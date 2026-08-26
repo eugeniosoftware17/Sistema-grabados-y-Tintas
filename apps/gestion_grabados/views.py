@@ -30,6 +30,67 @@ FIELD_MAP_FILEMAKER = {
 }
 
 
+# Columnas de "info" que se piden siempre, sin importar el proceso (para poder
+# resolver STAMPING o EMBOSSING con la misma fila y para inferir proceso_ext).
+# El orden acá define el orden posicional que devuelven las funciones _buscar_*.
+COLUMNAS_INFO_EXTERNA = [
+    'Sobre_pelicula', 'OF_Stamping', 'OF_Embossing',
+    'Acabat_Stamping', 'Acabat_Embossing', 'G_Cliente', 'G_Referencia',
+]
+
+VACIO_INFO_EXTERNA = {
+    'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0',
+    'proceso_ext': None, 'cliente_ext': '—', 'descripcion_ext': '—',
+}
+
+
+def _normalizar_of(of_numero):
+    """"22651.0" -> 22651; descarta todo lo que no sea dígito. None si no queda nada numérico."""
+    of_str = str(of_numero).strip()
+    if '.' in of_str:
+        of_str = of_str.split('.')[0]
+    of_limpia = re.sub(r'\D', '', of_str)
+    return int(of_limpia) if of_limpia else None
+
+
+def _procesar_fila_externa(row, proceso):
+    """Convierte una fila en el orden de COLUMNAS_INFO_EXTERNA al dict que consume
+    el resto de la app (mismas claves que antes devolvía buscar_datos_externos)."""
+    sobre, of_stamping, of_embossing, acabat_stamping, acabat_embossing, cliente, referencia = row
+
+    col_acabado = acabat_stamping if proceso == 'STAMPING' else acabat_embossing
+    val_acabado = str(col_acabado).strip().lower() if col_acabado is not None else '0'
+    if val_acabado in ['si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y']:
+        val_acabado = '1'
+    else:
+        val_acabado = '0'
+
+    def tiene_valor(v):
+        return v is not None and str(v).strip() not in ('', '—')
+
+    tiene_stamping = tiene_valor(of_stamping)
+    tiene_embossing = tiene_valor(of_embossing)
+    if tiene_stamping and not tiene_embossing:
+        proceso_ext = 'STAMPING'
+    elif tiene_embossing and not tiene_stamping:
+        proceso_ext = 'EMBOSSING'
+    else:
+        # Ambos u ninguno poblados: no se puede inferir un único proceso.
+        proceso_ext = None
+
+    ref = of_stamping if proceso == 'STAMPING' else of_embossing
+
+    return {
+        'sobre_ext': sobre if sobre else '—',
+        'ref_ext': ref if ref else '—',
+        'acabado_ext': val_acabado,
+        'proceso_ext': proceso_ext,
+        'cliente_ext': cliente if cliente else '—',
+        'descripcion_ext': referencia if referencia else '—',
+        'encontrado_ext': True,
+    }
+
+
 def _buscar_fila_db(of_int, columnas):
     """Consulta CigarRings2012 en externa_2012 por SQL directo. Devuelve la fila o None."""
     with connections['externa_2012'].cursor() as cursor:
@@ -62,73 +123,91 @@ def _buscar_fila_api(of_int, columnas):
     return [fila.get(campo_fm) for campo_fm in columnas_fm]
 
 
+def _buscar_filas_db_batch(of_ints):
+    """Igual que _buscar_fila_db pero para muchas G_orden en una sola consulta.
+    Devuelve {G_orden: fila} con fila en el orden de COLUMNAS_INFO_EXTERNA."""
+    if not of_ints:
+        return {}
+    with connections['externa_2012'].cursor() as cursor:
+        placeholders = ', '.join(['%s'] * len(of_ints))
+        columnas = ', '.join(['G_orden'] + COLUMNAS_INFO_EXTERNA)
+        query = f"SELECT {columnas} FROM CigarRings2012 WHERE G_orden IN ({placeholders})"
+        cursor.execute(query, of_ints)
+        return {row[0]: row[1:] for row in cursor.fetchall()}
+
+
+def _buscar_filas_api_batch(of_ints):
+    """Igual que _buscar_fila_api pero para muchas G_orden en una sola consulta HTTP
+    (un solo POST con WHERE "G_orden" IN (...) en vez de uno por OF).
+    Devuelve {G_orden: fila} con fila en el orden de COLUMNAS_INFO_EXTERNA."""
+    if not of_ints:
+        return {}
+    columnas = ['G_orden'] + COLUMNAS_INFO_EXTERNA
+    columnas_fm = [FIELD_MAP_FILEMAKER.get(c, c) for c in columnas]
+    select_clause = ', '.join(f'"{c}"' for c in columnas_fm)
+    lista_ids = ', '.join(str(i) for i in of_ints)  # of_ints son siempre int (ver _normalizar_of)
+    query = f'SELECT {select_clause} FROM "cigar rings FP10" WHERE "G_orden" IN ({lista_ids})'
+    payload = {
+        'connection': {
+            'host': settings.FM_HOST_NAME,
+            'dsn': settings.FM_DSN,
+            'uid': settings.FM_USER,
+            'pwd': settings.FM_PASSWORD,
+        },
+        'query': query,
+    }
+    resp = requests.post(settings.FM_URL, json=payload, verify=False, timeout=30)
+    resp.raise_for_status()
+    resultado = {}
+    for fila in resp.json():
+        g_orden = fila.get(columnas_fm[0])
+        if g_orden is None:
+            continue
+        resultado[int(g_orden)] = [fila.get(campo_fm) for campo_fm in columnas_fm[1:]]
+    return resultado
+
+
 def buscar_datos_externos(of_numero, proceso):
-    """Busca información técnica de STAMPING/EMBOSSING usando G_orden.
+    """Busca información técnica de STAMPING/EMBOSSING para una única OF usando G_orden.
     Origen configurable por settings.EXTERNA_2012_SOURCE: 'db' (SQL directo a
-    externa_2012) o 'api' (FileMaker Data API / mock local)."""
-    vacio = {'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0', 'proceso_ext': None, 'cliente_ext': '—', 'descripcion_ext': '—'}
+    externa_2012) o 'api' (FileMaker Data API / mock local).
+    Para muchas OF a la vez (ej. sincronizar_plani) usar buscar_datos_externos_batch,
+    que hace una sola consulta en vez de una por OF."""
+    of_int = _normalizar_of(of_numero)
+    if of_int is None:
+        return dict(VACIO_INFO_EXTERNA)
     try:
-        # Normalizar OF para búsqueda numérica: "22651.0" -> "22651"
-        of_str = str(of_numero).strip()
-        if '.' in of_str:
-            of_str = of_str.split('.')[0]
-        of_limpia = re.sub(r'\D', '', of_str)
-
-        if not of_limpia:
-            return vacio
-
-        of_int = int(of_limpia)
-
-        if proceso == 'STAMPING':
-            col_of_ref = 'OF_Stamping'
-            col_acabado = 'Acabat_Stamping'
-        else:
-            col_of_ref = 'OF_Embossing'
-            col_acabado = 'Acabat_Embossing'
-
-        # Se piden ambas columnas OF_* (no solo la del proceso pedido) para poder
-        # inferir a qué proceso pertenece realmente la orden (ver proceso_ext más abajo).
-        columnas = ['Sobre_pelicula', 'OF_Stamping', 'OF_Embossing', col_acabado, 'G_Cliente', 'G_Referencia']
-
         if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
-            row = _buscar_fila_api(of_int, columnas)
+            row = _buscar_fila_api(of_int, COLUMNAS_INFO_EXTERNA)
         else:
-            row = _buscar_fila_db(of_int, columnas)
-
+            row = _buscar_fila_db(of_int, COLUMNAS_INFO_EXTERNA)
         if row:
-            val_acabado = str(row[3]).strip().lower() if row[3] is not None else '0'
-            if val_acabado in ['si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y']:
-                val_acabado = '1'
-            else:
-                val_acabado = '0'
-
-            def tiene_valor(v):
-                return v is not None and str(v).strip() not in ('', '—')
-
-            tiene_stamping = tiene_valor(row[1])
-            tiene_embossing = tiene_valor(row[2])
-            if tiene_stamping and not tiene_embossing:
-                proceso_ext = 'STAMPING'
-            elif tiene_embossing and not tiene_stamping:
-                proceso_ext = 'EMBOSSING'
-            else:
-                # Ambos u ninguno poblados: no se puede inferir un único proceso.
-                proceso_ext = None
-
-            ref = row[1] if proceso == 'STAMPING' else row[2]
-
-            return {
-                'sobre_ext': row[0] if row[0] else '—',
-                'ref_ext': ref if ref else '—',
-                'acabado_ext': val_acabado,
-                'proceso_ext': proceso_ext,
-                'cliente_ext': row[4] if row[4] else '—',
-                'descripcion_ext': row[5] if row[5] else '—',
-                'encontrado_ext': True
-            }
+            return _procesar_fila_externa(row, proceso)
     except Exception as e:
         print(f"Error consultando datos externos para OF {of_numero}: {e}")
-    return vacio
+    return dict(VACIO_INFO_EXTERNA)
+
+
+def buscar_datos_externos_batch(of_numeros, proceso):
+    """Versión en lote de buscar_datos_externos(): una sola consulta (SQL o HTTP) para
+    todas las OF de `of_numeros`, en vez de una por OF. Pensada para sincronizar_plani(),
+    donde todas las filas de una misma hoja comparten el mismo `proceso`.
+    Devuelve {G_orden: info_dict}, con las mismas claves que buscar_datos_externos()."""
+    of_ints = sorted({of_int for of_int in (_normalizar_of(n) for n in of_numeros) if of_int is not None})
+
+    filas = {}
+    try:
+        if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
+            filas = _buscar_filas_api_batch(of_ints)
+        else:
+            filas = _buscar_filas_db_batch(of_ints)
+    except Exception as e:
+        print(f"Error consultando datos externos en lote ({proceso}, {len(of_ints)} OF): {e}")
+
+    return {
+        of_int: (_procesar_fila_externa(filas[of_int], proceso) if of_int in filas else dict(VACIO_INFO_EXTERNA))
+        for of_int in of_ints
+    }
 
 @login_required
 def grabado_consulta(request):
@@ -345,32 +424,41 @@ def sincronizar_plani(request):
             }
 
             ofs_procesadas_en_hoja = set()
+            filas_validas = []  # (index, of_str, row) de filas únicas y con OF válida
 
             for index, row in df.iterrows():
                 of_val = row[columnas_finales['of']]
-                
+
                 # NORMALIZACIÓN EXTREMA DE OF
                 of_raw = str(of_val).strip()
                 if not of_raw or of_raw.lower() == 'nan': continue
-                
+
                 # Manejar "22750.0" -> "22750"
                 if '.' in of_raw:
                     of_raw = of_raw.split('.')[0]
-                
+
                 # Solo dígitos: "22651-A" -> "22651"
                 of_str = re.sub(r'\D', '', of_raw)
-                
+
                 if not of_str: continue
 
                 # Si llegamos aquí, es una fila que intentaremos procesar
                 stats['total_filas_excel'] += 1
-                
+
                 # Detector de Duplicados
                 if of_str in ofs_procesadas_en_hoja:
                     stats['duplicados_omitidos'] += 1
                     continue
                 ofs_procesadas_en_hoja.add(of_str)
-                
+                filas_validas.append((index, of_str, row))
+
+            # Una sola consulta (SQL o HTTP) para todas las OF de la hoja, en vez de
+            # una por fila (antes: ~1 llamada por OF; ahora: 1 por hoja).
+            datos_externos_hoja = buscar_datos_externos_batch(
+                [of_str for _, of_str, _ in filas_validas], nombre_hoja
+            )
+
+            for index, of_str, row in filas_validas:
                 try:
                     item = {'of': of_str, 'proceso': nombre_hoja, 'referencia': '—'}
                     for campo, col_excel in columnas_finales.items():
@@ -381,10 +469,10 @@ def sincronizar_plani(request):
                             if isinstance(val, pd.Timestamp): val = val.strftime('%d/%m/%Y')
                             else: val = str(val)
                         item[campo] = val
-                    
+
                     # Enriquecimiento con DB local y externa
                     registro_eis = registros_locales.get(of_str)
-                    info_ext = buscar_datos_externos(of_str, nombre_hoja)
+                    info_ext = datos_externos_hoja.get(int(of_str), dict(VACIO_INFO_EXTERNA))
                     item.update(info_ext)
 
                     es_listo_ext = (info_ext.get('acabado_ext') == '1')
