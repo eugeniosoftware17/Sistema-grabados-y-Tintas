@@ -21,6 +21,8 @@
     }
     .aviso-externo--ok { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; }
     .aviso-externo--vacio { background: #fff3e0; color: #e65100; border: 1px solid #ffe0b2; }
+    .aviso-externo--advertencia { background: #fff8e1; color: #8a6100; border: 1px solid #ffe082; font-weight: 600; }
+    .control-entrada--advertencia { border-color: #f5c518; background: #fffbea; box-shadow: 0 0 0 3px rgba(245,197,24,0.25); }
 </style>
 {% endblock %}
 
@@ -94,6 +96,7 @@
             </button>
             <div id="fab-aviso-ok" class="aviso-externo aviso-externo--ok">Se encontraron datos para esta OF, revisá los campos.</div>
             <div id="fab-aviso-vacio" class="aviso-externo aviso-externo--vacio">No se encontró esa OF en el sistema externo. Completá los campos a mano.</div>
+            <div id="fab-aviso-doble-proceso" class="aviso-externo aviso-externo--advertencia">⚠️ Esta OF tiene datos para STAMPING y EMBOSSING. Selecciona el proceso correcto antes de guardar.</div>
 
             <div class="fila-triple">
                 <div class="campo-grupo">

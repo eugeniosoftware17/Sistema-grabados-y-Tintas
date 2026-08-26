@@ -41,6 +41,7 @@ COLUMNAS_INFO_EXTERNA = [
 VACIO_INFO_EXTERNA = {
     'encontrado_ext': False, 'sobre_ext': '—', 'ref_ext': '—', 'acabado_ext': '0',
     'proceso_ext': None, 'cliente_ext': '—', 'descripcion_ext': '—',
+    'of_stamping_ext': '—', 'of_embossing_ext': '—',
 }
 
 
@@ -87,6 +88,8 @@ def _procesar_fila_externa(row, proceso):
         'proceso_ext': proceso_ext,
         'cliente_ext': cliente if cliente else '—',
         'descripcion_ext': referencia if referencia else '—',
+        'of_stamping_ext': of_stamping if of_stamping else '—',
+        'of_embossing_ext': of_embossing if of_embossing else '—',
         'encontrado_ext': True,
     }
 
