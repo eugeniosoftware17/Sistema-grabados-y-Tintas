@@ -442,9 +442,34 @@
         document.getElementById('modal-historial').style.display = 'none';
     };
 
+    /* --- Cierre de paneles desplegables (clic afuera / exclusión mutua) --- */
+    const PANELES_DESPLEGABLES = [
+        { panelId: 'filtros-panel',      contenedorSelector: '.filtros-contenedor' },
+        { panelId: 'exportar-panel',     contenedorSelector: '.exportar-contenedor' },
+        { panelId: 'filtro-fecha-panel', contenedorSelector: '.filtro-fecha-contenedor' },
+        { panelId: 'columnas-panel',     contenedorSelector: '.columnas-contenedor' }
+    ];
+
+    function cerrarPanelesDesplegables() {
+        PANELES_DESPLEGABLES.forEach(({ panelId }) => {
+            const panel = document.getElementById(panelId);
+            if (panel) panel.style.display = 'none';
+        });
+    }
+
+    document.addEventListener('click', function(evento) {
+        const clicDentroDeAlgunPanel = PANELES_DESPLEGABLES.some(
+            ({ contenedorSelector }) => evento.target.closest(contenedorSelector)
+        );
+        if (!clicDentroDeAlgunPanel) cerrarPanelesDesplegables();
+    });
+
     window.alternarFiltrosPanel = function() {
         const panel = document.getElementById('filtros-panel');
-        if (panel) panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+        if (!panel) return;
+        const yaAbierto = panel.style.display === 'block';
+        cerrarPanelesDesplegables();
+        panel.style.display = yaAbierto ? 'none' : 'block';
     };
 
     window.limpiarTodosLosFiltros = function() {
@@ -480,7 +505,10 @@
     /* --- Funciones de Filtrado por Fecha --- */
     window.alternarFecha = function() {
         const panel = document.getElementById('filtro-fecha-panel');
-        if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+        if (!panel) return;
+        const yaAbierto = panel.style.display === 'block';
+        cerrarPanelesDesplegables();
+        panel.style.display = yaAbierto ? 'none' : 'block';
     };
 
     window.aplicarFiltroDeFecha = function() {
@@ -505,12 +533,18 @@
     /* --- Funciones de UI adicionales --- */
     window.alternarExportar = function() {
         const panel = document.getElementById('exportar-panel');
-        if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+        if (!panel) return;
+        const yaAbierto = panel.style.display === 'block';
+        cerrarPanelesDesplegables();
+        panel.style.display = yaAbierto ? 'none' : 'block';
     };
 
     window.alternarColumnasPanel = function() {
         const panel = document.getElementById('columnas-panel');
-        if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+        if (!panel) return;
+        const yaAbierto = panel.style.display === 'block';
+        cerrarPanelesDesplegables();
+        panel.style.display = yaAbierto ? 'none' : 'block';
     };
 
     /* ============================================================
