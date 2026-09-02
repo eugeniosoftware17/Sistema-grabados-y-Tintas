@@ -131,18 +131,24 @@ function renderizarTabla() {
         else if (estadoLabel === 'COMPLETADO') {
             estadoClase = 'estado--completado';
             gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span class="celda-estado ${estadoClase}">GUARDADO</span>
-                    <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
+                <div style="display:flex; flex-direction:column; gap:5px;">
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span class="celda-estado ${estadoClase}">GUARDADO</span>
+                        <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
+                    </div>
+                    <button class="boton" onclick="enviarAMaquina(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Enviar a Máquina</button>
                 </div>
             `;
         }
         else if (estadoLabel === 'REPETIR') {
             estadoClase = 'estado--cancelado';
             gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:2px;">
-                    <span class="celda-estado ${estadoClase}">PARA REPETIR</span>
-                    <small style="color: #d32f2f; font-size: 9px;">Ver ficha para motivo</small>
+                <div style="display:flex; flex-direction:column; gap:5px;">
+                    <div style="display:flex; flex-direction:column; gap:2px;">
+                        <span class="celda-estado ${estadoClase}">PARA REPETIR</span>
+                        <small style="color: #d32f2f; font-size: 9px;">Ver ficha para motivo</small>
+                    </div>
+                    <button class="boton boton--primario" onclick="abrirDashboard(${globalIdx})" style="padding: 5px 10px; font-size: 11px;">Iniciar Producción</button>
                 </div>
             `;
         }
@@ -168,7 +174,10 @@ function renderizarTabla() {
 
 function enviarAMaquina(index) {
     const reg = registrosFiltrados[index];
-    if (!confirm(`¿Confirmar que la OF ${reg.of} ya está en máquina?`)) return;
+    const mensaje = reg.estado_db === 'COMPLETADO'
+        ? `¿Confirmar que el grabado ya guardado de la OF ${reg.of} vuelve a producción?`
+        : `¿Confirmar que la OF ${reg.of} ya está en máquina?`;
+    if (!confirm(mensaje)) return;
 
     fetch('/grabados/api/registrar/', {
         method: 'POST',

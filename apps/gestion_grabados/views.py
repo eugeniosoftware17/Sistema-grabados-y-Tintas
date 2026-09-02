@@ -560,6 +560,12 @@ def api_registrar_actividad(request):
                 obj.tiempo = data.get('tiempo')
                 obj.peso_inicial = data.get('peso_i')
                 obj.peso_final = data.get('peso_f')
+                # Si la fila venia de REPETIR, descripcion quedo pisada con el
+                # motivo del dano ("Fisico: REPETIR. ..."); al reactivar para
+                # una nueva produccion hay que restaurar la descripcion real
+                # del grabado (la que manda el Plani/Excel).
+                if data.get('descripcion'):
+                    obj.descripcion = data.get('descripcion')
                 try:
                     pi = float(data.get('peso_i') or 0)  # g
                     pf = float(data.get('peso_f') or 0)  # g
