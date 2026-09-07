@@ -35,7 +35,10 @@
         <svg viewBox="0 0 24 24" stroke-width="2"><path d="M12 2v20M2 12h20"/></svg>
         Fabricación — Alta Manual de Grabados
       </div>
-      <button class="boton boton--primario" onclick="abrirModalFabricacion()">+ Registrar Grabado</button>
+      <div style="display:flex; gap:10px;">
+        <button class="boton" onclick="abrirModalLote()">Registro en Lote</button>
+        <button class="boton boton--primario" onclick="abrirModalFabricacion()">+ Registrar Grabado</button>
+      </div>
     </div>
 
     <p style="padding: 0 18px 12px; font-size: 13px; color: #666;">
@@ -150,6 +153,47 @@
         <div class="dashboard-pie">
             <button class="boton boton--cancelar" onclick="cerrarModalFabricacion()">Cancelar</button>
             <button class="boton boton--guardar" id="fab-btn-guardar" onclick="guardarFabricacion()">Guardar</button>
+        </div>
+    </div>
+  </div>
+
+  <!-- MODAL DE REGISTRO EN LOTE -->
+  <div id="modal-fabricacion-lote" class="overlay-moderno" style="display:none;">
+    <div class="dashboard-card" style="max-width: 520px;">
+        <div class="dashboard-cabecera">
+            <h3>Registro en Lote</h3>
+            <p>Registra varias OF a la vez con el mismo proceso, estado y ubicación</p>
+        </div>
+        <div class="dashboard-cuerpo">
+            <div class="campo-grupo">
+                <label>Números de OF (separados por coma):</label>
+                <textarea id="lote-ofs" class="control-entrada" rows="3" placeholder="Ej: 22741, 22742, 22743"></textarea>
+            </div>
+            <div class="fila-doble">
+                <div class="campo-grupo">
+                    <label>Proceso:</label>
+                    <select id="lote-proceso" class="control-entrada">
+                        <option value="STAMPING">STAMPING</option>
+                        <option value="EMBOSSING">EMBOSSING</option>
+                    </select>
+                </div>
+                <div class="campo-grupo">
+                    <label>Estado:</label>
+                    <select id="lote-estado" class="control-entrada">
+                        <option value="PENDIENTE">Pendiente</option>
+                        <option value="COMPLETADO" selected>Completado</option>
+                    </select>
+                </div>
+            </div>
+            <div class="campo-grupo">
+                <label>Ubicación Física (igual para todas):</label>
+                <input type="text" id="lote-ubicacion" class="control-entrada" placeholder="Ej: Cajón A-10">
+            </div>
+            <div id="lote-resumen" class="aviso-externo aviso-externo--ok" style="white-space: pre-line;"></div>
+        </div>
+        <div class="dashboard-pie">
+            <button class="boton boton--cancelar" onclick="cerrarModalLote()">Cancelar</button>
+            <button class="boton boton--guardar" id="lote-btn-guardar" onclick="guardarLote()">Guardar</button>
         </div>
     </div>
   </div>
