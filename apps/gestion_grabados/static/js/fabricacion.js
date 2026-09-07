@@ -235,6 +235,68 @@
             .finally(() => { btn.disabled = false; });
     };
 
+    function limpiarFormularioLote() {
+        document.getElementById('lote-ofs').value = '';
+        document.getElementById('lote-proceso').value = 'STAMPING';
+        document.getElementById('lote-estado').value = 'COMPLETADO';
+        document.getElementById('lote-ubicacion').value = '';
+        const resumen = document.getElementById('lote-resumen');
+        resumen.style.display = 'none';
+        resumen.textContent = '';
+    }
+
+    window.abrirModalLote = function () {
+        limpiarFormularioLote();
+        document.getElementById('modal-fabricacion-lote').style.display = 'flex';
+        document.getElementById('lote-ofs').focus();
+    };
+
+    window.cerrarModalLote = function () {
+        document.getElementById('modal-fabricacion-lote').style.display = 'none';
+    };
+
+    window.guardarLote = function () {
+        const ofs = document.getElementById('lote-ofs').value.trim();
+        if (!ofs) { alert('Ingresá al menos una OF.'); return; }
+
+        const payload = {
+            ofs: ofs,
+            proceso: document.getElementById('lote-proceso').value,
+            estado: document.getElementById('lote-estado').value,
+            ubicacion: document.getElementById('lote-ubicacion').value.trim(),
+        };
+
+        const btn = document.getElementById('lote-btn-guardar');
+        btn.disabled = true;
+
+        fetch('/grabados/api/fabricacion/registrar-lote/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify(payload),
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'ok') { alert('Error: ' + res.message); return; }
+
+                const omitidas = res.detalle.filter(d => d.status === 'omitido');
+                const resumen = document.getElementById('lote-resumen');
+                let texto = `${res.registrados} registrada(s), ${res.omitidos} omitida(s).`;
+                if (omitidas.length) {
+                    texto += '\nOmitidas: ' + omitidas.map(d => `${d.of} (${d.motivo})`).join(', ');
+                }
+                resumen.textContent = texto;
+                resumen.className = 'aviso-externo ' + (omitidas.length ? 'aviso-externo--advertencia' : 'aviso-externo--ok');
+                resumen.style.display = 'block';
+
+                cargarRegistrados();
+            })
+            .catch(() => alert('Error de conexión al guardar en lote.'))
+            .finally(() => { btn.disabled = false; });
+    };
+
     function cargarRegistrados() {
         fetch('/grabados/api/fabricacion/listar/')
             .then(r => r.json())

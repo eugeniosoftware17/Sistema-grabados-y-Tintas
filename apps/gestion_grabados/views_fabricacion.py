@@ -16,10 +16,11 @@ from django.shortcuts import render
 from django.utils import timezone
 
 from .models import OrdenFabricacion
-from .views import buscar_datos_externos
+from .views import buscar_datos_externos, buscar_datos_externos_batch, _normalizar_of, VACIO_INFO_EXTERNA
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
 ESTADOS_VALIDOS = dict(OrdenFabricacion.ESTADO_CHOICES)
+ESTADOS_LOTE_VALIDOS = ('PENDIENTE', 'COMPLETADO')
 
 
 @login_required
@@ -109,3 +110,63 @@ def api_listar_manual(request):
                  'referencia', 'papel', 'ubicacion', 'estado')
     )
     return JsonResponse({'status': 'ok', 'data': registros})
+
+
+@login_required
+def api_registrar_lote(request):
+    """Alta de varias OF a la vez para el mismo proceso/estado/ubicación.
+    A diferencia de api_registrar_manual, si una OF+proceso ya existe se
+    omite (no la pisa)."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        proceso = str(data.get('proceso', '')).strip().upper()
+        estado = str(data.get('estado', '')).strip().upper()
+        ubicacion = (data.get('ubicacion') or '').strip() or None
+
+        if proceso not in PROCESOS_VALIDOS:
+            return JsonResponse({'status': 'error', 'message': 'Proceso inválido'}, status=400)
+        if estado not in ESTADOS_LOTE_VALIDOS:
+            return JsonResponse({'status': 'error', 'message': 'Estado inválido'}, status=400)
+
+        ofs = list(dict.fromkeys(
+            of.strip().upper() for of in str(data.get('ofs', '')).split(',') if of.strip()
+        ))
+        if not ofs:
+            return JsonResponse({'status': 'error', 'message': 'Ingresá al menos una OF'}, status=400)
+
+        info_externa = buscar_datos_externos_batch(ofs, proceso)
+
+        detalle = []
+        for of_num in ofs:
+            if OrdenFabricacion.objects.filter(of=of_num, proceso=proceso).exists():
+                detalle.append({'of': of_num, 'status': 'omitido', 'motivo': 'Ya existe esa OF + proceso'})
+                continue
+
+            info = info_externa.get(_normalizar_of(of_num), dict(VACIO_INFO_EXTERNA))
+            OrdenFabricacion.objects.create(
+                of=of_num, proceso=proceso,
+                cliente=info['cliente_ext'] if info['encontrado_ext'] else 'Desconocido',
+                descripcion=info['descripcion_ext'] if info['encontrado_ext'] else '—',
+                referencia=info['ref_ext'] if info['encontrado_ext'] and info['ref_ext'] != '—' else None,
+                sobre=info['sobre_ext'] if info['encontrado_ext'] and info['sobre_ext'] != '—' else None,
+                ubicacion=ubicacion,
+                estado=estado,
+                fecha_registro=timezone.now().date(),
+                usuario=request.user,
+                origen_manual=True,
+                responsables=f"M-{request.user.username}",
+            )
+            detalle.append({'of': of_num, 'status': 'registrado'})
+
+        registrados = sum(1 for d in detalle if d['status'] == 'registrado')
+        return JsonResponse({
+            'status': 'ok',
+            'registrados': registrados,
+            'omitidos': len(detalle) - registrados,
+            'detalle': detalle,
+        })
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
