@@ -29,4 +29,5 @@ urlpatterns = [
     path('api/fabricacion/registrar/', views_fabricacion.api_registrar_manual, name='api_fabricacion_registrar'),
     path('api/fabricacion/listar/', views_fabricacion.api_listar_manual, name='api_fabricacion_listar'),
     path('api/fabricacion/registrar-lote/', views_fabricacion.api_registrar_lote, name='api_fabricacion_registrar_lote'),
+    path('api/fabricacion/editar-ubicacion/', views_fabricacion.api_editar_ubicacion, name='api_fabricacion_editar_ubicacion'),
 ]
