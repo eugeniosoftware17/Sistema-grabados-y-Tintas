@@ -240,9 +240,11 @@
         document.getElementById('lote-proceso').value = 'STAMPING';
         document.getElementById('lote-estado').value = 'COMPLETADO';
         document.getElementById('lote-ubicacion').value = '';
-        const resumen = document.getElementById('lote-resumen');
-        resumen.style.display = 'none';
-        resumen.textContent = '';
+        const resumenTexto = document.getElementById('lote-resumen-texto');
+        resumenTexto.style.display = 'none';
+        resumenTexto.textContent = '';
+        document.getElementById('lote-resumen-tabla-contenedor').style.display = 'none';
+        document.getElementById('lote-resumen-tabla-cuerpo').innerHTML = '';
     }
 
     window.abrirModalLote = function () {
@@ -281,21 +283,99 @@
             .then(res => {
                 if (res.status !== 'ok') { alert('Error: ' + res.message); return; }
 
-                const omitidas = res.detalle.filter(d => d.status === 'omitido');
-                const resumen = document.getElementById('lote-resumen');
-                let texto = `${res.registrados} registrada(s), ${res.omitidos} omitida(s).`;
-                if (omitidas.length) {
-                    texto += '\nOmitidas: ' + omitidas.map(d => `${d.of} (${d.motivo})`).join(', ');
-                }
-                resumen.textContent = texto;
-                resumen.className = 'aviso-externo ' + (omitidas.length ? 'aviso-externo--advertencia' : 'aviso-externo--ok');
-                resumen.style.display = 'block';
+                const resumenTexto = document.getElementById('lote-resumen-texto');
+                resumenTexto.textContent = `${res.registrados} registrada(s), ${res.omitidos} omitida(s).`;
+                resumenTexto.className = 'aviso-externo ' + (res.omitidos ? 'aviso-externo--advertencia' : 'aviso-externo--ok');
+                resumenTexto.style.display = 'block';
+
+                renderResumenLote(res.detalle, payload.proceso);
 
                 cargarRegistrados();
             })
             .catch(() => alert('Error de conexión al guardar en lote.'))
             .finally(() => { btn.disabled = false; });
     };
+
+    function renderResumenLote(detalle, proceso) {
+        const contenedor = document.getElementById('lote-resumen-tabla-contenedor');
+        const cuerpo = document.getElementById('lote-resumen-tabla-cuerpo');
+
+        cuerpo.innerHTML = detalle.map(d => {
+            const esOmitida = d.status === 'omitido';
+            const badge = esOmitida
+                ? '<span class="badge-lote badge-lote--omitida">Omitida - ya existe</span>'
+                : '<span class="badge-lote badge-lote--registrada">Registrada</span>';
+            const ubicacionTexto = d.ubicacion || '—';
+            const celdaUbicacion = esOmitida
+                ? `<td class="celda-ubicacion celda-ubicacion--editable" data-of="${d.of}" data-proceso="${proceso}" data-ubicacion="${d.ubicacion || ''}" title="Doble clic para editar">${ubicacionTexto}</td>`
+                : `<td>${ubicacionTexto}</td>`;
+            return `<tr><td><strong>${d.of}</strong></td><td>${badge}</td>${celdaUbicacion}</tr>`;
+        }).join('');
+
+        cuerpo.querySelectorAll('.celda-ubicacion--editable').forEach(celda => {
+            celda.addEventListener('dblclick', () => activarEdicionUbicacion(celda));
+        });
+
+        contenedor.style.display = 'block';
+    }
+
+    function activarEdicionUbicacion(celda) {
+        if (celda.querySelector('input')) return; // ya está en edición
+
+        const valorActual = celda.dataset.ubicacion || '';
+        celda.innerHTML = `<input type="text" value="${valorActual.replace(/"/g, '&quot;')}">`;
+        const input = celda.querySelector('input');
+        input.focus();
+        input.select();
+
+        let guardado = false;
+        const confirmar = () => {
+            if (guardado) return;
+            guardado = true;
+            guardarUbicacionCelda(celda, input.value.trim());
+        };
+
+        input.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+            else if (ev.key === 'Escape') { guardado = true; renderCeldaUbicacion(celda, valorActual); }
+        });
+        input.addEventListener('blur', confirmar);
+    }
+
+    function renderCeldaUbicacion(celda, ubicacion) {
+        celda.dataset.ubicacion = ubicacion || '';
+        celda.textContent = ubicacion || '—';
+    }
+
+    function guardarUbicacionCelda(celda, nuevaUbicacion) {
+        const of = celda.dataset.of;
+        const proceso = celda.dataset.proceso;
+
+        celda.innerHTML = '<em style="color:#999;">Guardando…</em>';
+
+        fetch('/grabados/api/fabricacion/editar-ubicacion/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken'),
+            },
+            body: JSON.stringify({ of: of, proceso: proceso, ubicacion: nuevaUbicacion }),
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status === 'ok') {
+                    renderCeldaUbicacion(celda, res.ubicacion);
+                    cargarRegistrados();
+                } else {
+                    alert('Error: ' + res.message);
+                    renderCeldaUbicacion(celda, celda.dataset.ubicacion);
+                }
+            })
+            .catch(() => {
+                alert('Error de conexión al guardar la ubicación.');
+                renderCeldaUbicacion(celda, celda.dataset.ubicacion);
+            });
+    }
 
     function cargarRegistrados() {
         fetch('/grabados/api/fabricacion/listar/')

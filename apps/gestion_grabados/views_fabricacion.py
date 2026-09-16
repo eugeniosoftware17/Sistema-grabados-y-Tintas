@@ -141,8 +141,12 @@ def api_registrar_lote(request):
 
         detalle = []
         for of_num in ofs:
-            if OrdenFabricacion.objects.filter(of=of_num, proceso=proceso).exists():
-                detalle.append({'of': of_num, 'status': 'omitido', 'motivo': 'Ya existe esa OF + proceso'})
+            existente = OrdenFabricacion.objects.filter(of=of_num, proceso=proceso).first()
+            if existente:
+                detalle.append({
+                    'of': of_num, 'status': 'omitido', 'motivo': 'Ya existe esa OF + proceso',
+                    'ubicacion': existente.ubicacion or '',
+                })
                 continue
 
             info = info_externa.get(_normalizar_of(of_num), dict(VACIO_INFO_EXTERNA))
@@ -159,7 +163,7 @@ def api_registrar_lote(request):
                 origen_manual=True,
                 responsables=f"M-{request.user.username}",
             )
-            detalle.append({'of': of_num, 'status': 'registrado'})
+            detalle.append({'of': of_num, 'status': 'registrado', 'ubicacion': ubicacion or ''})
 
         registrados = sum(1 for d in detalle if d['status'] == 'registrado')
         return JsonResponse({
@@ -168,5 +172,31 @@ def api_registrar_lote(request):
             'omitidos': len(detalle) - registrados,
             'detalle': detalle,
         })
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@login_required
+def api_editar_ubicacion(request):
+    """Edita solo la ubicación física de una OF+proceso ya existente. Se usa
+    desde el resumen del Registro en Lote para corregir la ubicación de OF
+    que se omitieron por ya estar cargadas."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        of_num = str(data.get('of', '')).strip().upper()
+        proceso = str(data.get('proceso', '')).strip().upper()
+        ubicacion = (data.get('ubicacion') or '').strip() or None
+
+        if not of_num or proceso not in PROCESOS_VALIDOS:
+            return JsonResponse({'status': 'error', 'message': 'OF y proceso son obligatorios'}, status=400)
+
+        actualizados = OrdenFabricacion.objects.filter(of=of_num, proceso=proceso).update(ubicacion=ubicacion)
+        if not actualizados:
+            return JsonResponse({'status': 'error', 'message': 'No existe esa OF + proceso'}, status=404)
+
+        return JsonResponse({'status': 'ok', 'ubicacion': ubicacion or ''})
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
