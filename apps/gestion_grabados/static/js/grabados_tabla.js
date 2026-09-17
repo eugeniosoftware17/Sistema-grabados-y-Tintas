@@ -104,8 +104,7 @@
        4. CARGA Y FILTROS
     ============================================================ */
 
-    function cargarDatosDesdeDB() {
-      // Cargar KPIs
+    function cargarKPIs() {
       fetch('/grabados/api/kpis/')
         .then(res => res.json())
         .then(kpis => {
@@ -114,8 +113,11 @@
             document.getElementById('kpi-repetir').innerText = kpis.para_repetir || 0;
             document.getElementById('kpi-pendientes').innerText = kpis.pendientes || 0;
         });
+    }
 
-      fetch('/grabados/api/registros/')
+    function cargarRegistros(query) {
+      const url = query ? `/grabados/api/registros/?q=${encodeURIComponent(query)}` : '/grabados/api/registros/';
+      return fetch(url)
         .then(res => res.json())
         .then(data => {
           DATOS_REGISTROS = data;
@@ -124,15 +126,16 @@
         .catch(err => console.error("Error al cargar registros:", err));
     }
 
+    function cargarDatosDesdeDB() {
+      cargarKPIs();
+      cargarRegistros();
+    }
+
     function aplicarFiltrosCombinados() {
       const filtroEstado = document.getElementById('filtro-estado') ? document.getElementById('filtro-estado').value : '';
       const filtroProceso = document.getElementById('filtro-proceso') ? document.getElementById('filtro-proceso').value : '';
 
       let filtrados = DATOS_REGISTROS.filter(reg => {
-        if (palabrasBusqueda.length > 0) {
-          const pool = Object.values(reg).join(' ').toLowerCase();
-          if (!palabrasBusqueda.every(p => pool.includes(p))) return false;
-        }
         if (fechaDesdeTs || fechaHastaTs) {
           const ts = parsearFecha(reg.fecha);
           if (!ts || (fechaDesdeTs && ts < fechaDesdeTs) || (fechaHastaTs && ts > fechaHastaTs)) return false;
@@ -541,8 +544,9 @@
     const buscador = document.getElementById('buscador-input');
     if (buscador) {
         buscador.addEventListener('input', debounce(e => {
-            palabrasBusqueda = e.target.value.toLowerCase().trim().split(/\s+/).filter(p => p);
-            aplicarFiltrosCombinados();
+            const texto = e.target.value.trim();
+            palabrasBusqueda = texto.toLowerCase().split(/\s+/).filter(p => p);
+            cargarRegistros(texto);
         }, 300));
     }
 
