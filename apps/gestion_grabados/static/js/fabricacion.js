@@ -8,6 +8,7 @@
     'use strict';
 
     let registrosSesion = [];
+    let palabrasBusqueda = [];
 
     const ESTADOS = {
         PENDIENTE: 'Pendiente', EN_PROCESO: 'En Proceso', EN_MAQUINA: 'En Máquina',
@@ -106,13 +107,29 @@
             .catch(() => alert('Error de conexión al buscar en el sistema externo.'));
     };
 
+    function coincideBusqueda(r) {
+        if (!palabrasBusqueda.length) return true;
+        const pool = [r.of, r.cliente, r.descripcion, r.proceso, r.ubicacion, ESTADOS[r.estado] || r.estado]
+            .join(' ').toLowerCase();
+        return palabrasBusqueda.every(p => pool.includes(p));
+    }
+
     function renderTabla() {
         const tbody = document.getElementById('tabla-cuerpo-fabricacion');
         if (!registrosSesion.length) {
             tbody.innerHTML = '<tr><td colspan="11" class="tabla-sin-resultados">Todavía no registraste nada en esta sesión.</td></tr>';
             return;
         }
-        tbody.innerHTML = registrosSesion.map((r, idx) => {
+        const filas = registrosSesion
+            .map((r, idx) => ({ r, idx }))
+            .filter(({ r }) => coincideBusqueda(r));
+
+        if (!filas.length) {
+            tbody.innerHTML = '<tr><td colspan="11" class="tabla-sin-resultados">Ningún registro coincide con la búsqueda.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = filas.map(({ r, idx }) => {
             let htmlAcciones = `<div class="fila-acciones">
                 <button class="boton-accion boton-accion--editar-azul" onclick="window.editarRegistroFabricacion(${idx})" title="Editar">
                     <svg viewBox="0 0 24 24" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -387,6 +404,14 @@
                 }
             })
             .catch(() => renderTabla());
+    }
+
+    const buscador = document.getElementById('fab-buscador-input');
+    if (buscador) {
+        buscador.addEventListener('input', e => {
+            palabrasBusqueda = e.target.value.toLowerCase().trim().split(/\s+/).filter(p => p);
+            renderTabla();
+        });
     }
 
     cargarRegistrados();
