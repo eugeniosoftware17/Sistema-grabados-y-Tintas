@@ -20,6 +20,14 @@
         return match ? decodeURIComponent(match[2]) : null;
     }
 
+    function debounce(fn, espera) {
+        let temporizador;
+        return function (...args) {
+            clearTimeout(temporizador);
+            temporizador = setTimeout(() => fn.apply(this, args), espera);
+        };
+    }
+
     function limpiarFormulario() {
         ['fab-of', 'fab-maquina', 'fab-sobre', 'fab-referencia', 'fab-papel', 'fab-cliente', 'fab-ubicacion', 'fab-descripcion']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
@@ -408,10 +416,10 @@
 
     const buscador = document.getElementById('fab-buscador-input');
     if (buscador) {
-        buscador.addEventListener('input', e => {
+        buscador.addEventListener('input', debounce(e => {
             palabrasBusqueda = e.target.value.toLowerCase().trim().split(/\s+/).filter(p => p);
             renderTabla();
-        });
+        }, 300));
     }
 
     cargarRegistrados();
