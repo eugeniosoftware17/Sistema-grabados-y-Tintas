@@ -16,6 +16,24 @@ function getCookie(name) {
     return match ? decodeURIComponent(match[2]) : null;
 }
 
+function parsearFechaProgramada(str) {
+    if (!str || str === '—') return null;
+    const partes = str.split('/');
+    if (partes.length !== 3) return null;
+    return new Date(partes[2], partes[1] - 1, partes[0]).getTime();
+}
+
+function finDeSemanaActual() {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const diaSemana = hoy.getDay(); // 0=domingo ... 6=sábado
+    const diasHastaDomingo = diaSemana === 0 ? 0 : 7 - diaSemana;
+    const domingo = new Date(hoy);
+    domingo.setDate(hoy.getDate() + diasHastaDomingo);
+    domingo.setHours(23, 59, 59, 999);
+    return domingo.getTime();
+}
+
 // Función que dispara la sincronización desde el servidor
 function sincronizarConExcel() {
     const btn = document.getElementById('btn-sincronizar');
@@ -138,15 +156,27 @@ function renderizarTabla() {
         }
         else if (estadoLabel === 'COMPLETADO') {
             estadoClase = 'estado--completado';
-            gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
+            const tsFechaProg = parsearFechaProgramada(reg.fecha_programada);
+            const esFuturaFueraDeEstaSemana = tsFechaProg !== null && tsFechaProg > finDeSemanaActual();
+
+            if (esFuturaFueraDeEstaSemana) {
+                gestionHTML = `
+                    <div style="display:flex; flex-direction:column; gap:5px;">
+                        <div style="display:flex; flex-direction:column; gap:2px;">
+                            <span class="celda-estado ${estadoClase}">GUARDADO</span>
+                            <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
+                        </div>
+                        <button class="boton" onclick="enviarAMaquina(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Enviar a Máquina</button>
+                    </div>
+                `;
+            } else {
+                gestionHTML = `
                     <div style="display:flex; flex-direction:column; gap:2px;">
                         <span class="celda-estado ${estadoClase}">GUARDADO</span>
                         <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
                     </div>
-                    <button class="boton" onclick="enviarAMaquina(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Enviar a Máquina</button>
-                </div>
-            `;
+                `;
+            }
         }
         else if (estadoLabel === 'REPETIR') {
             estadoClase = 'estado--cancelado';
