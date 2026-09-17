@@ -155,8 +155,14 @@
         if (filtroEstado && reg.estado !== filtroEstado) return false;
         if (filtroProceso && reg.proceso !== filtroProceso) return false;
         for (const col of COLUMNAS_FILTRABLES) {
-          const set = filtrosColumna[col];
-          if (set && !set.has(normalizarValorColumna(reg[col]))) return false;
+          const filtro = filtrosColumna[col];
+          if (!filtro) continue;
+          if (COLUMNAS_FECHA.includes(col)) {
+            const ts = parsearFecha(reg[col]);
+            if (!ts || (filtro.desde && ts < filtro.desde) || (filtro.hasta && ts > filtro.hasta)) return false;
+          } else if (!filtro.has(normalizarValorColumna(reg[col]))) {
+            return false;
+          }
         }
         return true;
       });
@@ -367,9 +373,7 @@
         DATOS_REGISTROS.forEach(reg => set.add(normalizarValorColumna(reg[col])));
         const valores = Array.from(set);
 
-        if (COLUMNAS_FECHA.includes(col)) {
-            valores.sort((a, b) => (parsearFecha(a) || 0) - (parsearFecha(b) || 0));
-        } else if (COLUMNAS_NUMERICAS.includes(col)) {
+        if (COLUMNAS_NUMERICAS.includes(col)) {
             valores.sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
         } else {
             valores.sort((a, b) => a.localeCompare(b, 'es'));
@@ -377,9 +381,20 @@
         return valores;
     }
 
+    function formatearFechaInputLocal(ts) {
+        const d = new Date(ts);
+        const yyyy = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yyyy}-${mm}-${dd}`;
+    }
+
     function actualizarIconoFiltro(col) {
         const btn = document.querySelector(`.boton-filtro-columna[data-columna="${col}"]`);
         if (btn) btn.classList.toggle('boton-filtro-columna--activo', !!filtrosColumna[col]);
+
+        const punto = document.getElementById(`indicador-filtro-${col}`);
+        if (punto) punto.style.display = filtrosColumna[col] ? 'inline-block' : 'none';
     }
 
     window.alternarFiltroColumna = function(col, btnEl) {
@@ -392,11 +407,37 @@
         columnaFiltroAbierta = col;
         document.getElementById('filtro-columna-titulo').textContent = 'Filtrar ' + NOMBRES_COLUMNAS[col];
 
+        const lista = document.getElementById('filtro-columna-lista');
+
+        if (COLUMNAS_FECHA.includes(col)) {
+            const filtro = filtrosColumna[col]; // {desde, hasta} o undefined
+            const desdeVal = filtro && filtro.desde ? formatearFechaInputLocal(filtro.desde) : '';
+            const hastaVal = filtro && filtro.hasta ? formatearFechaInputLocal(filtro.hasta) : '';
+            lista.innerHTML = `
+                <div style="padding:12px 14px; display:flex; flex-direction:column; gap:10px;">
+                    <label style="font-size:11px; font-weight:600; color:var(--color-texto-suave);">Desde:
+                        <input type="date" id="filtro-columna-fecha-desde" value="${desdeVal}"
+                               style="display:block; width:100%; margin-top:4px; padding:5px 8px; border:1px solid var(--color-borde); border-radius:6px; font-size:12px; box-sizing:border-box;"
+                               onchange="window.actualizarFiltroColumnaFecha()">
+                    </label>
+                    <label style="font-size:11px; font-weight:600; color:var(--color-texto-suave);">Hasta:
+                        <input type="date" id="filtro-columna-fecha-hasta" value="${hastaVal}"
+                               style="display:block; width:100%; margin-top:4px; padding:5px 8px; border:1px solid var(--color-borde); border-radius:6px; font-size:12px; box-sizing:border-box;"
+                               onchange="window.actualizarFiltroColumnaFecha()">
+                    </label>
+                </div>
+            `;
+            const rectFecha = btnEl.getBoundingClientRect();
+            panel.style.top = `${rectFecha.bottom + 4}px`;
+            panel.style.left = `${Math.min(rectFecha.left, window.innerWidth - 236)}px`;
+            panel.style.display = 'block';
+            return;
+        }
+
         const valores = obtenerValoresUnicos(col);
         const seleccion = filtrosColumna[col]; // Set o undefined (= todos)
         const todosMarcados = !seleccion;
 
-        const lista = document.getElementById('filtro-columna-lista');
         lista.innerHTML = `
             <div class="filtro-columna-buscador" style="position:sticky; top:0; background:#fff; padding:6px 14px; border-bottom:1px solid var(--color-borde);">
                 <input type="text" id="filtro-columna-buscador-input" placeholder="Buscar valor..."
@@ -422,6 +463,21 @@
 
         const buscadorInput = document.getElementById('filtro-columna-buscador-input');
         if (buscadorInput) buscadorInput.focus();
+    };
+
+    window.actualizarFiltroColumnaFecha = function() {
+        const col = columnaFiltroAbierta;
+        if (!col) return;
+        const d = document.getElementById('filtro-columna-fecha-desde').value;
+        const h = document.getElementById('filtro-columna-fecha-hasta').value;
+        const desde = d ? new Date(d + 'T00:00:00').getTime() : null;
+        const hasta = h ? new Date(h + 'T23:59:59').getTime() : null;
+
+        if (!desde && !hasta) delete filtrosColumna[col];
+        else filtrosColumna[col] = { desde, hasta };
+
+        actualizarIconoFiltro(col);
+        aplicarFiltrosCombinados();
     };
 
     window.filtrarValoresFiltroColumna = function(texto) {
@@ -460,10 +516,17 @@
         const col = columnaFiltroAbierta;
         if (!col) return;
         delete filtrosColumna[col];
-        document.querySelectorAll('.fcv-valor, #fcv-todos').forEach(c => c.checked = true);
-        const buscadorInput = document.getElementById('filtro-columna-buscador-input');
-        if (buscadorInput) buscadorInput.value = '';
-        document.querySelectorAll('.fcv-fila').forEach(fila => fila.style.display = '');
+        if (COLUMNAS_FECHA.includes(col)) {
+            const desdeInput = document.getElementById('filtro-columna-fecha-desde');
+            const hastaInput = document.getElementById('filtro-columna-fecha-hasta');
+            if (desdeInput) desdeInput.value = '';
+            if (hastaInput) hastaInput.value = '';
+        } else {
+            document.querySelectorAll('.fcv-valor, #fcv-todos').forEach(c => c.checked = true);
+            const buscadorInput = document.getElementById('filtro-columna-buscador-input');
+            if (buscadorInput) buscadorInput.value = '';
+            document.querySelectorAll('.fcv-fila').forEach(fila => fila.style.display = '');
+        }
         actualizarIconoFiltro(col);
         aplicarFiltrosCombinados();
     };
