@@ -8,6 +8,14 @@
         return match ? decodeURIComponent(match[2]) : null;
     }
 
+    function debounce(fn, espera) {
+        let temporizador;
+        return function (...args) {
+            clearTimeout(temporizador);
+            temporizador = setTimeout(() => fn.apply(this, args), espera);
+        };
+    }
+
     /* ============================================================
        1. ESTADO DE LA APLICACIÓN
     ============================================================ */
@@ -532,10 +540,10 @@
 
     const buscador = document.getElementById('buscador-input');
     if (buscador) {
-        buscador.addEventListener('input', e => {
+        buscador.addEventListener('input', debounce(e => {
             palabrasBusqueda = e.target.value.toLowerCase().trim().split(/\s+/).filter(p => p);
             aplicarFiltrosCombinados();
-        });
+        }, 300));
     }
 
     inicializarPanelColumnas();
