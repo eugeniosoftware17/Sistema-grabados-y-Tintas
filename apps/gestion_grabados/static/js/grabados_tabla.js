@@ -21,10 +21,15 @@
     ============================================================ */
     const REGISTROS_POR_PAGINA = 1000;
 
-    let DATOS_REGISTROS    = []; 
-    let registrosFiltrados = []; 
-    let paginaActual       = 1;  
-    let palabrasBusqueda   = []; 
+    let DATOS_REGISTROS    = [];
+    let registrosFiltrados = [];
+    let paginaActual       = 1;
+    let palabrasBusqueda   = [];
+
+    // Filtros por columna estilo Excel (proceso, estado, maquina, tipo, responsables)
+    const COLUMNAS_FILTRABLES = ['proceso', 'estado', 'maquina', 'tipo', 'responsables'];
+    let filtrosColumna    = {}; // { estado: Set(['PENDIENTE','COMPLETADO']), ... } — sin entrada = sin filtro
+    let columnaFiltroAbierta = null;
 
     // Configurar filtro de los últimos 3 meses por defecto
     const fechaInicioDefault = new Date();
@@ -142,6 +147,10 @@
         }
         if (filtroEstado && reg.estado !== filtroEstado) return false;
         if (filtroProceso && reg.proceso !== filtroProceso) return false;
+        for (const col of COLUMNAS_FILTRABLES) {
+          const set = filtrosColumna[col];
+          if (set && !set.has(normalizarValorColumna(reg[col]))) return false;
+        }
         return true;
       });
 
@@ -339,6 +348,89 @@
     };
 
     /* ============================================================
+       6b. FILTROS POR COLUMNA (estilo Excel)
+    ============================================================ */
+
+    function normalizarValorColumna(v) {
+        return (v === null || v === undefined || v === '' || v === '—') ? '—' : String(v);
+    }
+
+    function obtenerValoresUnicos(col) {
+        const set = new Set();
+        DATOS_REGISTROS.forEach(reg => set.add(normalizarValorColumna(reg[col])));
+        return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
+    }
+
+    function actualizarIconoFiltro(col) {
+        const btn = document.querySelector(`.boton-filtro-columna[data-columna="${col}"]`);
+        if (btn) btn.classList.toggle('boton-filtro-columna--activo', !!filtrosColumna[col]);
+    }
+
+    window.alternarFiltroColumna = function(col, btnEl) {
+        const panel = document.getElementById('filtro-columna-panel');
+        if (!panel) return;
+        const mismoYAbierto = panel.style.display === 'block' && columnaFiltroAbierta === col;
+        cerrarPanelesDesplegables();
+        if (mismoYAbierto) return;
+
+        columnaFiltroAbierta = col;
+        document.getElementById('filtro-columna-titulo').textContent = 'Filtrar ' + NOMBRES_COLUMNAS[col];
+
+        const valores = obtenerValoresUnicos(col);
+        const seleccion = filtrosColumna[col]; // Set o undefined (= todos)
+        const todosMarcados = !seleccion;
+
+        const lista = document.getElementById('filtro-columna-lista');
+        lista.innerHTML = `
+            <div class="filtro-columna-opcion filtro-columna-opcion--todos">
+                <input type="checkbox" id="fcv-todos" ${todosMarcados ? 'checked' : ''} onchange="window.alternarTodosFiltroColumna(this.checked)">
+                <label for="fcv-todos"><strong>(Seleccionar todos)</strong></label>
+            </div>
+        ` + valores.map((v, i) => {
+            const checked = todosMarcados || seleccion.has(v);
+            return `<div class="filtro-columna-opcion">
+                <input type="checkbox" class="fcv-valor" id="fcv-${i}" value="${v.replace(/"/g, '&quot;')}" ${checked ? 'checked' : ''} onchange="window.actualizarFiltroColumna()">
+                <label for="fcv-${i}">${v}</label>
+            </div>`;
+        }).join('');
+
+        const rect = btnEl.getBoundingClientRect();
+        panel.style.top = `${rect.bottom + 4}px`;
+        panel.style.left = `${Math.min(rect.left, window.innerWidth - 236)}px`;
+        panel.style.display = 'block';
+    };
+
+    window.alternarTodosFiltroColumna = function(marcarTodos) {
+        document.querySelectorAll('.fcv-valor').forEach(c => c.checked = marcarTodos);
+        window.actualizarFiltroColumna();
+    };
+
+    window.actualizarFiltroColumna = function() {
+        const col = columnaFiltroAbierta;
+        if (!col) return;
+        const checkboxes = Array.from(document.querySelectorAll('.fcv-valor'));
+        const marcados = checkboxes.filter(c => c.checked).map(c => c.value);
+
+        if (marcados.length === checkboxes.length) delete filtrosColumna[col];
+        else filtrosColumna[col] = new Set(marcados);
+
+        const todos = document.getElementById('fcv-todos');
+        if (todos) todos.checked = marcados.length === checkboxes.length;
+
+        actualizarIconoFiltro(col);
+        aplicarFiltrosCombinados();
+    };
+
+    window.limpiarFiltroColumnaActual = function() {
+        const col = columnaFiltroAbierta;
+        if (!col) return;
+        delete filtrosColumna[col];
+        document.querySelectorAll('.fcv-valor, #fcv-todos').forEach(c => c.checked = true);
+        actualizarIconoFiltro(col);
+        aplicarFiltrosCombinados();
+    };
+
+    /* ============================================================
        7. FUNCIONES GLOBALES (Exportadas)
     ============================================================ */
 
@@ -426,12 +518,15 @@
             const panel = document.getElementById(panelId);
             if (panel) panel.style.display = 'none';
         });
+        const panelColumna = document.getElementById('filtro-columna-panel');
+        if (panelColumna) panelColumna.style.display = 'none';
+        columnaFiltroAbierta = null;
     }
 
     document.addEventListener('click', function(evento) {
         const clicDentroDeAlgunPanel = PANELES_DESPLEGABLES.some(
             ({ contenedorSelector }) => evento.target.closest(contenedorSelector)
-        );
+        ) || evento.target.closest('#filtro-columna-panel') || evento.target.closest('.boton-filtro-columna');
         if (!clicDentroDeAlgunPanel) cerrarPanelesDesplegables();
     });
 
@@ -549,6 +644,13 @@
             cargarRegistros(texto);
         }, 300));
     }
+
+    document.querySelectorAll('.boton-filtro-columna').forEach(btn => {
+        btn.addEventListener('click', ev => {
+            ev.stopPropagation(); // no disparar el orden del th
+            window.alternarFiltroColumna(btn.dataset.columna, btn);
+        });
+    });
 
     inicializarPanelColumnas();
     cargarDatosDesdeDB();

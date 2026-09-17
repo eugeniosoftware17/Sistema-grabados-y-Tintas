@@ -443,6 +443,114 @@
       vertical-align: middle;
     }
 
+    /* ============================================================
+       FILTROS POR COLUMNA (estilo Excel)
+       .boton-filtro-columna              (ícono embudo en el th)
+       #filtro-columna-panel              (panel flotante compartido, portal)
+         ├── .filtro-columna-panel__cabecera
+         └── .filtro-columna-panel__lista
+               └── .filtro-columna-opcion (ítem con checkbox)
+    ============================================================ */
+    .boton-filtro-columna {
+      display        : inline-flex;
+      align-items    : center;
+      justify-content: center;
+      width          : 16px;
+      height         : 16px;
+      padding        : 0;
+      margin-left    : 2px;
+      border         : none;
+      background     : none;
+      cursor         : pointer;
+      vertical-align : middle;
+      border-radius  : 3px;
+    }
+
+    .boton-filtro-columna svg {
+      width      : 10px;
+      height     : 10px;
+      stroke     : rgba(255, 255, 255, 0.55);
+      fill       : none;
+      margin     : 0;
+    }
+
+    .boton-filtro-columna:hover { background: rgba(255, 255, 255, 0.15); }
+    .boton-filtro-columna:hover svg { stroke: #fff; }
+
+    /* Ícono distinto cuando la columna tiene un filtro activo */
+    .boton-filtro-columna--activo svg {
+      stroke: #ffe082;
+      fill  : #ffe082;
+    }
+
+    .filtro-columna-panel {
+      display      : none; /* alternado vía JS con style.display */
+      position     : fixed;
+      background   : #fff;
+      border       : 1px solid var(--color-borde);
+      border-radius: 10px;
+      box-shadow   : 0 6px 20px rgba(0, 0, 0, 0.15);
+      width        : 220px;
+      max-height   : 300px;
+      z-index      : 500;
+      overflow     : hidden;
+    }
+
+    .filtro-columna-panel__cabecera {
+      display        : flex;
+      align-items    : center;
+      justify-content: space-between;
+      padding        : 10px 14px;
+      border-bottom  : 1px solid var(--color-borde);
+      background     : var(--color-verde-claro);
+    }
+
+    .filtro-columna-panel__cabecera span {
+      font-size     : 11px;
+      font-weight   : 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color         : var(--color-verde-oscuro);
+    }
+
+    .filtro-columna-panel__lista {
+      padding   : 6px 0;
+      max-height: 250px;
+      overflow-y: auto;
+    }
+
+    .filtro-columna-opcion {
+      display    : flex;
+      align-items: center;
+      gap        : 8px;
+      padding    : 6px 14px;
+      font-size  : 12px;
+      color      : var(--color-texto);
+    }
+
+    .filtro-columna-opcion:hover { background: var(--color-hover-fila); }
+
+    .filtro-columna-opcion input[type="checkbox"] {
+      accent-color: var(--color-verde-principal);
+      width       : 14px;
+      height      : 14px;
+      cursor      : pointer;
+      flex-shrink : 0;
+    }
+
+    .filtro-columna-opcion label {
+      cursor       : pointer;
+      overflow     : hidden;
+      text-overflow: ellipsis;
+      white-space  : nowrap;
+    }
+
+    .filtro-columna-opcion--todos {
+      border-bottom: 1px solid var(--color-borde);
+      margin-bottom: 4px;
+      padding-bottom: 8px;
+    }
+
     /* Filas del cuerpo */
     .tabla-registros tbody tr {
       border-bottom: 1px solid var(--color-borde);
