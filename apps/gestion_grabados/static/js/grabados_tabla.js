@@ -26,8 +26,15 @@
     let paginaActual       = 1;
     let palabrasBusqueda   = [];
 
-    // Filtros por columna estilo Excel (proceso, estado, maquina, tipo, responsables)
-    const COLUMNAS_FILTRABLES = ['proceso', 'estado', 'maquina', 'tipo', 'responsables'];
+    // Filtros por columna estilo Excel (todas las columnas de datos, salvo "acciones")
+    const COLUMNAS_FILTRABLES = [
+        'of', 'ref', 'cliente', 'desc', 'estado', 'fecha', 'fecha_reg',
+        'proceso', 'maquina', 'tipo', 'ubicacion', 'sobre', 'cantidad',
+        'horas', 'responsables', 'peso_i', 'peso_f', 'perdida', 'temp',
+        'rpm', 'tiempo_t', 'comp'
+    ];
+    const COLUMNAS_NUMERICAS = ['cantidad', 'horas', 'peso_i', 'peso_f', 'perdida', 'temp', 'rpm', 'tiempo_t', 'comp'];
+    const COLUMNAS_FECHA = ['fecha', 'fecha_reg'];
     let filtrosColumna    = {}; // { estado: Set(['PENDIENTE','COMPLETADO']), ... } — sin entrada = sin filtro
     let columnaFiltroAbierta = null;
 
@@ -358,7 +365,16 @@
     function obtenerValoresUnicos(col) {
         const set = new Set();
         DATOS_REGISTROS.forEach(reg => set.add(normalizarValorColumna(reg[col])));
-        return Array.from(set).sort((a, b) => a.localeCompare(b, 'es'));
+        const valores = Array.from(set);
+
+        if (COLUMNAS_FECHA.includes(col)) {
+            valores.sort((a, b) => (parsearFecha(a) || 0) - (parsearFecha(b) || 0));
+        } else if (COLUMNAS_NUMERICAS.includes(col)) {
+            valores.sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+        } else {
+            valores.sort((a, b) => a.localeCompare(b, 'es'));
+        }
+        return valores;
     }
 
     function actualizarIconoFiltro(col) {
@@ -382,13 +398,18 @@
 
         const lista = document.getElementById('filtro-columna-lista');
         lista.innerHTML = `
+            <div class="filtro-columna-buscador" style="position:sticky; top:0; background:#fff; padding:6px 14px; border-bottom:1px solid var(--color-borde);">
+                <input type="text" id="filtro-columna-buscador-input" placeholder="Buscar valor..."
+                       style="width:100%; box-sizing:border-box; padding:5px 8px; border:1px solid var(--color-borde); border-radius:6px; font-size:12px;"
+                       oninput="window.filtrarValoresFiltroColumna(this.value)">
+            </div>
             <div class="filtro-columna-opcion filtro-columna-opcion--todos">
                 <input type="checkbox" id="fcv-todos" ${todosMarcados ? 'checked' : ''} onchange="window.alternarTodosFiltroColumna(this.checked)">
                 <label for="fcv-todos"><strong>(Seleccionar todos)</strong></label>
             </div>
         ` + valores.map((v, i) => {
             const checked = todosMarcados || seleccion.has(v);
-            return `<div class="filtro-columna-opcion">
+            return `<div class="filtro-columna-opcion fcv-fila" data-valor-texto="${v.toLowerCase().replace(/"/g, '&quot;')}">
                 <input type="checkbox" class="fcv-valor" id="fcv-${i}" value="${v.replace(/"/g, '&quot;')}" ${checked ? 'checked' : ''} onchange="window.actualizarFiltroColumna()">
                 <label for="fcv-${i}">${v}</label>
             </div>`;
@@ -398,10 +419,24 @@
         panel.style.top = `${rect.bottom + 4}px`;
         panel.style.left = `${Math.min(rect.left, window.innerWidth - 236)}px`;
         panel.style.display = 'block';
+
+        const buscadorInput = document.getElementById('filtro-columna-buscador-input');
+        if (buscadorInput) buscadorInput.focus();
+    };
+
+    window.filtrarValoresFiltroColumna = function(texto) {
+        const t = texto.trim().toLowerCase();
+        document.querySelectorAll('.fcv-fila').forEach(fila => {
+            fila.style.display = (!t || fila.dataset.valorTexto.includes(t)) ? '' : 'none';
+        });
     };
 
     window.alternarTodosFiltroColumna = function(marcarTodos) {
-        document.querySelectorAll('.fcv-valor').forEach(c => c.checked = marcarTodos);
+        document.querySelectorAll('.fcv-fila').forEach(fila => {
+            if (fila.style.display === 'none') return; // no tocar lo oculto por la búsqueda
+            const chk = fila.querySelector('.fcv-valor');
+            if (chk) chk.checked = marcarTodos;
+        });
         window.actualizarFiltroColumna();
     };
 
@@ -426,6 +461,9 @@
         if (!col) return;
         delete filtrosColumna[col];
         document.querySelectorAll('.fcv-valor, #fcv-todos').forEach(c => c.checked = true);
+        const buscadorInput = document.getElementById('filtro-columna-buscador-input');
+        if (buscadorInput) buscadorInput.value = '';
+        document.querySelectorAll('.fcv-fila').forEach(fila => fila.style.display = '');
         actualizarIconoFiltro(col);
         aplicarFiltrosCombinados();
     };
