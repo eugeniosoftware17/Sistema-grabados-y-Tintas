@@ -97,10 +97,11 @@ function renderizarTabla() {
 
         if (estadoLabel === 'PENDIENTE') {
             if (reg.status_db === 'existente') {
-                // Ya existe en la base (creado antes, ej. de forma manual) y no
-                // arranco produccion: se manda directo a maquina, sin pasar por
-                // el formulario de datos tecnicos.
-                gestionHTML = `<button class="boton" onclick="enviarAMaquina(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Enviar a Máquina</button>`;
+                // Ya existe en la base (ej. alta manual desde Fabricación) pero
+                // todavia no paso por un ciclo de produccion: queda guardado,
+                // sin accion disponible hasta que se complete un ciclo real.
+                estadoClase = 'estado--completado';
+                gestionHTML = `<span class="celda-estado ${estadoClase}">GUARDADO</span>`;
             } else {
                 gestionHTML = `<button class="boton boton--primario" onclick="abrirDashboard(${globalIdx})" style="padding: 5px 10px; font-size: 11px;">Iniciar Producción</button>`;
             }
@@ -184,8 +185,6 @@ function enviarAMaquina(index) {
     let mensaje;
     if (reg.estado_db === 'COMPLETADO') {
         mensaje = `¿Confirmar que el grabado ya guardado de la OF ${reg.of} vuelve a producción?`;
-    } else if (reg.estado_db === 'PENDIENTE' && reg.status_db === 'existente') {
-        mensaje = `¿Confirmar que la OF ${reg.of} (ya cargada) se manda a máquina?`;
     } else {
         mensaje = `¿Confirmar que la OF ${reg.of} ya está en máquina?`;
     }
