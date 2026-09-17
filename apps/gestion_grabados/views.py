@@ -11,6 +11,7 @@ from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
+from django.db.models import Q
 
 # La FileMaker Data API (CRDAPS10) usa un certificado autofirmado; se acepta el
 # mismo riesgo de MITM en LAN que ya asume la conexión a SQL Server (TrustServerCertificate=yes).
@@ -222,12 +223,26 @@ def plani_consulta(request):
 
 @login_required
 def api_obtener_registros(request):
-    registros = list(OrdenFabricacion.objects.all().values(
-        'of', 'referencia', 'descripcion', 'cliente', 
-        'tipo_grabado', 'proceso', 'maquina', 'estado', 
+    queryset = OrdenFabricacion.objects.all()
+
+    q = request.GET.get('q', '').strip()
+    if q:
+        for palabra in q.split():
+            queryset = queryset.filter(
+                Q(of__icontains=palabra) |
+                Q(cliente__icontains=palabra) |
+                Q(descripcion__icontains=palabra) |
+                Q(proceso__icontains=palabra) |
+                Q(ubicacion__icontains=palabra) |
+                Q(estado__icontains=palabra)
+            )
+
+    registros = list(queryset.values(
+        'of', 'referencia', 'descripcion', 'cliente',
+        'tipo_grabado', 'proceso', 'maquina', 'estado',
         'fecha_programada', 'fecha_registro', 'ubicacion', 'sobre',
         'cantidad_formatos', 'horas_proceso',
-        'responsables', 'peso_inicial', 'peso_final', 
+        'responsables', 'peso_inicial', 'peso_final',
         'perdida', 'temp', 'rpm', 'tiempo', 'compensacion',
         'usos_acumulados', 'foto_dano'
     ))
