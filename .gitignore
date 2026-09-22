@@ -12,6 +12,7 @@ env/
 ENV/
 .env
 CLAUDE.md
+INFORME_SEGURIDAD.txt
 
 # Mock local de la FileMaker Data API (solo desarrollo, no producción)
 api_simulada.py
