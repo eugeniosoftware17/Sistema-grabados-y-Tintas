@@ -108,6 +108,9 @@ DATABASES = {
     }
 }
 
+# Tipo de clave primaria por defecto. Explícito para no depender del default de
+# cada versión de Django (las migraciones existentes ya usan BigAutoField).
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 
