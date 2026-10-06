@@ -45,7 +45,7 @@
     }
 
     function etiqueta(codigo, texto) {
-        return `<span class="pg-etiqueta pg-etiqueta--${escapar(codigo)}">${escapar(texto)}</span>`;
+        return `<span class="pg-etiqueta pg-etiqueta--${escapar(codigo)}" title="${escaparAtributo(texto)}">${escapar(texto)}</span>`;
     }
 
     function debounce(fn, espera) {
@@ -122,53 +122,105 @@
     }
 
     // ---------------------------------------------------------------- render
-    function textoGrabadoDeOtra(g) {
-        return g && g.usa_grabado_de_otra ? `<span class="plani-nota">Grabado de la OF ${escapar(g.of_origen)}</span>` : '';
+    // Columna "Grabado": la misma tarjeta en todas las filas.
+    //   Línea 1: etiqueta de estado + botón ojo (si hay grabado) + botón de
+    //            acción de ancho fijo a la derecha (si hay acción).
+    //   Línea 2: nota secundaria con ícono (solo si existe, una línea con "...").
+    const ICONOS = {
+        ojo: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+        enlace: '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+        ubicacion: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+        alerta: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+        hecho: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+        reloj: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+        bandera: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+    };
+
+    function icono(nombre) {
+        return `<svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONOS[nombre]}</svg>`;
     }
 
-    function botonVer(g) {
-        return g ? `<button type="button" class="plani-enlace" data-accion="ver">Ver grabado</button>` : '';
+    function escaparAtributo(valor) {
+        return escapar(valor).replace(/"/g, '&quot;');
+    }
+
+    function tarjeta({ estado, grabado, nota, accion }) {
+        const ojo = grabado
+            ? `<button type="button" class="plani-ojo" data-accion="ver" title="Ver grabado"
+                       aria-label="Ver grabado ${escaparAtributo(grabado.of_origen)} ${escaparAtributo(grabado.proceso)}">${icono('ojo')}</button>`
+            : '';
+        const notaHtml = nota
+            ? `<p class="plani-tarjeta__nota ${nota.clase || ''}" title="${escaparAtributo(nota.texto)}">${icono(nota.icono)}<span>${escapar(nota.texto)}</span></p>`
+            : '';
+        const boton = accion
+            ? `<button type="button" class="boton plani-accion plani-accion--${accion.estilo}" data-accion="${accion.codigo}">${escapar(accion.texto)}</button>`
+            : '';
+        return `<div class="plani-tarjeta">
+                    <div class="plani-tarjeta__cabecera">${etiqueta(estado[0], estado[1])}${ojo}${boton}</div>
+                    ${notaHtml}
+                </div>`;
+    }
+
+    function notaGrabadoDeOtra(g) {
+        return g && g.usa_grabado_de_otra ? { icono: 'enlace', texto: `Grabado de la OF ${g.of_origen}` } : null;
+    }
+
+    function conGrabadoDeOtra(texto, g) {
+        return g && g.usa_grabado_de_otra ? `${texto} · Grabado de la OF ${g.of_origen}` : texto;
     }
 
     function celdaGestion(fila) {
         const e = fila.grabado || {};
         const g = e.grabado;
+        const estadoGrabado = g ? [g.estado, g.estado_display] : null;
         switch (e.accion) {
             case 'SIN_PROCESO':
-                return `${etiqueta('neutra', 'Sin datos del proceso')}<span class="plani-nota">${escapar(e.mensaje)}</span>`;
+                return tarjeta({ estado: ['neutra', 'Sin datos del proceso'],
+                                 nota: { icono: 'alerta', texto: e.mensaje } });
             case 'DAR_DE_ALTA':
-                return `<span class="plani-nota">${escapar(e.mensaje)}</span>
-                    <div class="plani-gestion__botones">
-                        <button type="button" class="boton boton--primario boton--chico" data-accion="alta">Dar de alta</button>
-                    </div>`;
+                return tarjeta({
+                    estado: ['neutra', 'Sin grabado'],
+                    // Solo si usa el grabado de otra OF; "Sin grabado" ya lo dice todo en el otro caso.
+                    nota: e.alta && e.alta.of !== String(fila.of) ? { icono: 'enlace', texto: e.mensaje } : null,
+                    accion: { codigo: 'alta', texto: 'Dar de alta', estilo: 'contorno' },
+                });
             case 'SIN_ACCION':
-                return `${etiqueta(g.estado, g.estado_display)}${textoGrabadoDeOtra(g)}${botonVer(g)}`;
+                return tarjeta({
+                    estado: estadoGrabado, grabado: g,
+                    nota: g.estado === 'EN_MAQUINA'
+                        ? { icono: 'alerta', texto: conGrabadoDeOtra(e.mensaje, g) }
+                        : notaGrabadoDeOtra(g),
+                });
             case 'MANDAR':
-                return `${etiqueta(g.estado, g.estado_display)}
-                    ${g.ubicacion ? `<span class="plani-nota">📍 ${escapar(g.ubicacion)}</span>` : ''}${textoGrabadoDeOtra(g)}
-                    <div class="plani-gestion__botones">
-                        <button type="button" class="boton boton--primario boton--chico" data-accion="mandar">Mandar a máquina</button>
-                    </div>${botonVer(g)}`;
+                return tarjeta({
+                    estado: estadoGrabado, grabado: g,
+                    nota: notaGrabadoDeOtra(g) || (g.ubicacion ? { icono: 'ubicacion', texto: g.ubicacion } : null),
+                    accion: { codigo: 'mandar', texto: 'Mandar a máquina', estilo: 'principal' },
+                });
             case 'MANDAR_OTRA_VEZ':
-                return `<span class="plani-nota plani-nota--ok">✓ Completada el ${escapar(e.completada.fecha)}${
-                        e.completada.ubicacion ? ' · ' + escapar(e.completada.ubicacion) : ''}</span>${textoGrabadoDeOtra(g)}
-                    <div class="plani-gestion__botones">
-                        <button type="button" class="boton boton--secundario boton--chico" data-accion="mandar-otra-vez">Mandar otra vez</button>
-                    </div>${botonVer(g)}`;
+                return tarjeta({
+                    estado: estadoGrabado, grabado: g,
+                    nota: { icono: 'hecho', clase: 'plani-tarjeta__nota--verde',
+                            texto: `Completada el ${e.completada.fecha}${e.completada.ubicacion ? ' · ' + e.completada.ubicacion : ''}` },
+                    accion: { codigo: 'mandar-otra-vez', texto: 'Mandar otra vez', estilo: 'contorno' },
+                });
             case 'RECOGER':
-                return `${etiqueta('EN_MAQUINA', 'En máquina')}
-                    ${e.terminada_en_planta ? '<span class="plani-terminada">Terminada en planta</span>' : ''}
-                    <span class="plani-nota">${escapar(e.mensaje)}</span>${textoGrabadoDeOtra(g)}
-                    <div class="plani-gestion__botones">
-                        <button type="button" class="boton boton--chico" style="background:#1565c0; color:#fff;" data-accion="recoger">Recoger</button>
-                    </div>${botonVer(g)}`;
+                return tarjeta({
+                    estado: ['EN_MAQUINA', 'En máquina'], grabado: g,
+                    nota: e.terminada_en_planta
+                        ? { icono: 'bandera', clase: 'plani-tarjeta__nota--azul',
+                            texto: conGrabadoDeOtra(`Terminada en planta · ${e.envio.maquina}`, g) }
+                        : { icono: 'reloj', texto: conGrabadoDeOtra(e.mensaje, g) },
+                    accion: { codigo: 'recoger', texto: 'Recoger', estilo: 'principal plani-accion--recoger' },
+                });
             case 'EN_MAQUINA_OTRA':
-                return `${etiqueta('EN_MAQUINA', e.mensaje)}${textoGrabadoDeOtra(g)}${botonVer(g)}`;
+                return tarjeta({ estado: ['EN_MAQUINA', 'En máquina'], grabado: g,
+                                 nota: { icono: 'reloj', texto: e.mensaje } });   // ya nombra la OF que lo tiene
             case 'REFABRICAR':
-                return `${etiqueta(g.estado, g.estado_display)}${textoGrabadoDeOtra(g)}
-                    <div class="plani-gestion__botones">
-                        <button type="button" class="boton boton--primario boton--chico" data-accion="refabricar">Refabricar</button>
-                    </div>${botonVer(g)}`;
+                return tarjeta({
+                    estado: estadoGrabado, grabado: g, nota: notaGrabadoDeOtra(g),
+                    accion: { codigo: 'refabricar', texto: 'Refabricar', estilo: 'contorno' },
+                });
             default:
                 return '—';
         }
@@ -199,7 +251,7 @@
                 <td data-label="Proceso">${escapar(fila.proceso)}</td>
                 <td data-label="Máquina">${escapar(fila.maquina)}</td>
                 <td data-label="Fecha prog.">${escapar(fila.fecha_programada)}</td>
-                <td data-label="Grabado" class="plani-celda-gestion"><div class="plani-gestion">${celdaGestion(fila)}</div></td>
+                <td data-label="Grabado" class="plani-celda-gestion">${celdaGestion(fila)}</td>
             </tr>`;
         }).join('');
     }
