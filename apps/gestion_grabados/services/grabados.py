@@ -425,10 +425,20 @@ ESTADOS_FISICOS = ('OK', 'REPETIR')
 LARGO_MINIMO_COMENTARIO_REPETIR = 5
 
 
+# Escrituras distintas de una misma máquina (ya en mayúsculas y con espacios
+# colapsados) -> nombre del catálogo.
+ALIAS_MAQUINAS = {
+    'STARFOIL': 'STAR FOIL',
+    'STAN FOIL': 'STAR FOIL',
+}
+
+
 def normalizar_nombre_maquina(texto):
-    """Mayúsculas y espacios colapsados: 'gietz  01 ' -> 'GIETZ 01'. Es la misma
-    regla que usará migrar_a_grabados al cargar el catálogo."""
-    return ' '.join(str(texto or '').split()).upper()
+    """Mayúsculas, espacios colapsados y alias: 'gietz  01 ' -> 'GIETZ 01',
+    'stan foil' -> 'STAR FOIL'. Es la misma regla que usa migrar_a_grabados
+    al cargar el catálogo."""
+    nombre = ' '.join(str(texto or '').split()).upper()
+    return ALIAS_MAQUINAS.get(nombre, nombre)
 
 
 def resolver_maquina(nombre):

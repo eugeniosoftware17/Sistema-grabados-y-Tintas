@@ -860,6 +860,13 @@ class PlaniMandarTests(BasePlani):
         self.assertEqual((envio.cantidad_formatos, envio.horas_proceso, envio.papel), (1200, 2.5, 'Couché 90 g'))
         self.assertIsNone(envio.recogido_el)
 
+    def test_plani_aplica_los_alias_de_maquina(self):
+        self.assertEqual(servicio.normalizar_nombre_maquina(' stan  foil '), 'STAR FOIL')
+        self.assertEqual(servicio.normalizar_nombre_maquina('StarFoil'), 'STAR FOIL')
+        star_foil = Maquina.objects.create(nombre='STAR FOIL')
+        envio = self.mandar(self.aprobado(), maquina='stan foil')
+        self.assertEqual(envio.maquina, star_foil)
+
     def test_maquina_fuera_del_catalogo_inactiva_o_vacia(self):
         grabado = self.aprobado()
         casos = (('GIETZ 03', 'no está en el catálogo'), ('GIETZ 99', 'inactiva'), ('', 'no tiene máquina'))
@@ -1237,6 +1244,33 @@ class MigrarAGrabadosTests(TestCase):
         self.orden('22742', maquina=' Gietz   01 ')
         self.migrar('--aplicar')
         self.assertEqual(list(Maquina.objects.values_list('nombre', flat=True)), ['GIETZ 01'])
+
+    def test_unifica_alias_de_star_foil_y_lista_gbb_sin_unificar(self):
+        for of, nombre in (('22741', 'STAR FOIL'), ('22742', 'STARFOIL'), ('22743', 'stan foil'),
+                           ('22744', 'GBB-1-3')):
+            self.orden(of, maquina=nombre)
+        salida = self.migrar('--aplicar', '--limite', '0')
+
+        self.assertEqual(sorted(Maquina.objects.values_list('nombre', flat=True)), ['GBB-1-3', 'STAR FOIL'])
+        self.assertEqual(EnvioMaquina.objects.filter(maquina__nombre='STAR FOIL').count(), 3)
+        gbb = OrdenFabricacion.objects.get(of='22744')
+        self.assertIn(f"id={gbb.id} OF=22744 STAMPING COMPLETADO máquina='GBB-1-3'", salida)
+
+    def test_reporte_separa_grabados_nuevos_de_los_que_ya_estaban_y_cuenta_envios(self):
+        Grabado.objects.create(of_origen='30000', proceso='STAMPING', cliente='ALTA',
+                               referencia='ALTA', estado='PENDIENTE_K1')
+        self.orden('22741')
+        self.orden('22742', estado='EN_MAQUINA')
+        self.orden('22743', estado='EN_PROCESO')
+        salida = self.migrar()
+
+        nuevos, previos = salida.split('Grabados que crea la migración, por estado:')[1].split(
+            'Grabados que ya estaban en la base')
+        self.assertNotIn('PENDIENTE_K1', nuevos)
+        self.assertIn('EN_MAQUINA', nuevos)
+        self.assertIn('PENDIENTE_K1', previos.split('Fabricaciones')[0])
+        self.assertRegex(salida, r'cerrados \(COMPLETADO / REPETIR / REVISION\)\s+1')
+        self.assertRegex(salida, r'abiertos \(EN_MAQUINA\)\s+1')
 
     def test_es_idempotente(self):
         self.orden('22741')

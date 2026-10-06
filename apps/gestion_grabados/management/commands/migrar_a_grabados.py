@@ -27,7 +27,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
-from django.db.models import Count, F, Max
+from django.db.models import F, Max
 from django.utils import timezone
 
 from apps.gestion_grabados.management.commands.auditar_grabados import (
@@ -56,6 +56,8 @@ PREFIJOS_EVENTO = ('FALLO:', 'Físico:')
 CAMPOS_PESO = ('peso_inicial', 'peso_final', 'perdida')
 FECHA_CORTE_PESOS = date(2026, 8, 12)
 MAQUINA_SIN_NOMBRE = 'SIN MÁQUINA (LEGADO)'
+# Nombres que todavía no se sabe a qué máquina corresponden: se listan sus filas.
+MAQUINAS_POR_REVISAR = ('GBB-1-3',)
 # SQL Server admite como mucho 2100 parámetros por consulta.
 TAMANO_LOTE_API = 500
 
@@ -319,6 +321,13 @@ class Command(BaseCommand):
             for forma, nombres in sorted(por_forma.items())
         )
 
+        por_revisar = [f for f in self.filas
+                       if normalizar_nombre_maquina(f['maquina']) in MAQUINAS_POR_REVISAR]
+        self.r.conteo(f"Filas con máquina por identificar ({', '.join(MAQUINAS_POR_REVISAR)}; no se unifica)",
+                      len(por_revisar), alerta=True)
+        self.r.lista(f"id={f['id']} OF={f['of']} {f['proceso']} {f['estado']} máquina={f['maquina']!r}"
+                     for f in por_revisar)
+
     def seccion_pesos(self):
         filas = [f for f in self.filas
                  if fecha_local(f['creado_el']) < FECHA_CORTE_PESOS
@@ -341,6 +350,11 @@ class Command(BaseCommand):
         self.roles = Counter()
         self.grabados_nuevos = 0
         self.grabados_reutilizados = 0
+        # Los grabados que ya estaban no cambian de estado (los reutilizados solo suman usos).
+        self.estados_previos = Counter(Grabado.objects.values_list('estado', flat=True))
+        self.estados_nuevos = Counter()
+        self.fabricaciones = Counter()
+        self.envios = Counter()
 
         for f in self.sin_grupo:
             self.enlazar(f, 'SIN_MIGRAR')
@@ -389,6 +403,7 @@ class Command(BaseCommand):
             Grabado.objects.filter(pk=grabado.pk).update(usos_acumulados=F('usos_acumulados') + usos)
         else:
             self.grabados_nuevos += 1
+            self.estados_nuevos[estado] += 1
             grabado = Grabado.objects.create(
                 of_origen=of_origen, proceso=proceso, estado=estado, aprobado_legado=True,
                 ubicacion=self.ultimo_valor(migrables, 'ubicacion', 200),
@@ -466,7 +481,7 @@ class Command(BaseCommand):
         return datos
 
     def crear_fabricacion(self, grabado, f, numero, tipo):
-        return FabricacionGrabado.objects.create(
+        fabricacion = FabricacionGrabado.objects.create(
             grabado=grabado, numero=numero, tipo=tipo,
             responsables=f['responsables'], peso_inicial=f['peso_inicial'],
             peso_final=f['peso_final'], perdida=f['perdida'], temp=f['temp'], rpm=f['rpm'],
@@ -478,6 +493,9 @@ class Command(BaseCommand):
                            and any(f[c] is not None for c in CAMPOS_PESO)),
             registrado_por_id=f['usuario_id'], registrado_el=f['creado_el'],
         )
+        self.fabricaciones[tipo] += 1
+        self.fabricaciones['revisar_pesos'] += fabricacion.revisar_pesos
+        return fabricacion
 
     def crear_envio(self, grabado, f, abierto):
         """COMPLETADO / REPETIR / REVISION -> envío cerrado; EN_MAQUINA -> envío
@@ -489,6 +507,7 @@ class Command(BaseCommand):
             self.conflictos.append(f'{self.desc(f)}: EN_MAQUINA que no puede quedar abierto '
                                    '(no es la fila más reciente o el grabado ya existía); se cierra '
                                    'sin estado físico.')
+        self.envios['abiertos' if abierto else 'cerrados'] += 1
         descripcion = (f['descripcion'] or '').strip()
         return EnvioMaquina.objects.create(
             grabado=grabado, of=f['of_norm'], maquina=self.maquina(f['maquina']),
@@ -530,14 +549,28 @@ class Command(BaseCommand):
         self.r.conteo('Máquinas creadas en el catálogo', len(maquinas_creadas))
         self.r.lista(maquinas_creadas)
 
-        self.r.linea('\n  LegadoOrden de esta corrida, por rol:')
+        self.r.linea('\n  Grabados que crea la migración, por estado:')
+        for estado, n in sorted(getattr(self, 'estados_nuevos', Counter()).items()):
+            self.r.conteo(f'  {estado}', n)
+        self.r.linea('\n  Grabados que ya estaban en la base (Alta / pruebas), por estado:')
+        for estado, n in sorted(getattr(self, 'estados_previos', Counter()).items()):
+            self.r.conteo(f'  {estado}', n)
+
+        fabricaciones = getattr(self, 'fabricaciones', Counter())
+        self.r.linea('\n  Fabricaciones que crea la migración:')
+        for tipo in ('INICIAL', 'REPETICION'):
+            self.r.conteo(f'  {tipo}', fabricaciones[tipo])
+        self.r.conteo('  marcadas para revisar pesos', fabricaciones['revisar_pesos'])
+
+        envios = getattr(self, 'envios', Counter())
+        self.r.linea('\n  Envíos a máquina que crea la migración:')
+        self.r.conteo('  cerrados (COMPLETADO / REPETIR / REVISION)', envios['cerrados'])
+        self.r.conteo('  abiertos (EN_MAQUINA)', envios['abiertos'])
+
+        self.r.linea('\n  LegadoOrden de esta corrida, por rol (uno por fila; una fila con envío')
+        self.r.linea('  queda como FABRICACION si además fue fabricación, si no como USO o ENVIO_ABIERTO):')
         for rol, n in sorted(getattr(self, 'roles', Counter()).items()):
             self.r.conteo(f'  {rol}', n)
-        self.r.linea('\n  Grabados en la base, por estado:')
-        for fila in Grabado.objects.values('estado').annotate(n=Count('id')).order_by('estado'):
-            self.r.conteo(f"  {fila['estado']}", fila['n'])
-        self.r.conteo('Fabricaciones marcadas para revisar pesos',
-                      FabricacionGrabado.objects.filter(revisar_pesos=True).count())
 
         legados, ordenes = self.conciliacion
         self.r.linea('')
