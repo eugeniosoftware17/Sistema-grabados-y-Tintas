@@ -90,8 +90,9 @@ class GrabadoAdmin(admin.ModelAdmin):
 
 @admin.register(FabricacionGrabado)
 class FabricacionGrabadoAdmin(admin.ModelAdmin):
-    list_display = ('grabado', 'numero', 'tipo', 'responsables', 'registrado_por', 'registrado_el')
-    list_filter = ('tipo', 'grabado__proceso')
+    list_display = ('grabado', 'numero', 'tipo', 'responsables', 'registrado_por', 'registrado_el',
+                    'revisar_pesos')
+    list_filter = ('tipo', 'grabado__proceso', 'revisar_pesos')
     search_fields = ('grabado__of_origen', 'responsables')
     list_select_related = ('grabado', 'registrado_por')
 

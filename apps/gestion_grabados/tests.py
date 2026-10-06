@@ -1,6 +1,7 @@
 """
 Pruebas de los modelos nuevos: alta de grabado y decisión de K1 (fase 2),
-inventario, y PLANI con envío a máquina y recogida (fase 3).
+inventario, y PLANI con envío a máquina y recogida (fase 3), y el comando
+migrar_a_grabados (fase 4).
 
 Los datos externos (API / externa_2012) se simulan con mock: las pruebas solo
 usan la base `default` (test_CigarRingsEIS), que Django crea y borra sola.
@@ -9,16 +10,21 @@ import json
 import os
 import shutil
 import tempfile
+from datetime import datetime, timedelta, timezone as dt_timezone
+from io import StringIO
 from unittest import mock
 
 import pandas as pd
 from django.contrib.auth.models import Group, User
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
 from apps.gestion_grabados import selectors
 from apps.gestion_grabados.models import (
-    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, Maquina, OrdenFabricacion, PruebaK1,
+    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, LegadoOrden, Maquina, OrdenFabricacion,
+    PruebaK1,
 )
 from apps.gestion_grabados.services import grabados as servicio
 from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
@@ -1092,3 +1098,188 @@ class FabricacionRetiradaTests(BaseGrabados):
     def test_alta_acepta_of_y_proceso_en_la_url(self):
         respuesta = self.client.get(reverse('grabados:alta_grabado') + '?of=22741&proceso=STAMPING')
         self.assertEqual(respuesta.status_code, 200)
+
+
+# ============================================================
+# COMANDO migrar_a_grabados (fase 4)
+# ============================================================
+
+RUTA_CONSULTAR_EXTERNOS = 'apps.gestion_grabados.management.commands.migrar_a_grabados.consultar_externos'
+ANTES_DEL_CORTE = datetime(2026, 7, 1, 12, 0, tzinfo=dt_timezone.utc)
+DESPUES_DEL_CORTE = datetime(2026, 9, 1, 12, 0, tzinfo=dt_timezone.utc)
+MODELOS_NUEVOS = (Grabado, FabricacionGrabado, EnvioMaquina, Maquina, LegadoOrden)
+
+
+class MigrarAGrabadosTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.operario = User.objects.create_user('operario', password='x')
+
+    def setUp(self):
+        self.salida = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.salida, ignore_errors=True)
+
+    def orden(self, of, estado='COMPLETADO', proceso='STAMPING', referencia=None,
+              creado=DESPUES_DEL_CORTE, tecnicos=True, **campos):
+        datos = {'descripcion': 'ANILLA LEGADA', 'cliente': 'CLIENTE LEGADO', 'maquina': 'Gietz  01',
+                 'usos_acumulados': 1, 'usuario': self.operario, 'ubicacion': 'CAJON A1'}
+        if tecnicos:
+            datos.update(responsables='Juan', peso_inicial=3000, peso_final=2000, perdida=1000,
+                         temp=150, rpm=800, tiempo='5h', compensacion='0.5mm')
+        datos.update(campos)
+        orden = OrdenFabricacion.objects.create(of=of, referencia=referencia, proceso=proceso,
+                                                estado=estado, **datos)
+        # creado_el / actualizado_el son automáticos: se fijan después.
+        OrdenFabricacion.objects.filter(pk=orden.pk).update(creado_el=creado, actualizado_el=creado)
+        return orden
+
+    def migrar(self, *args, externos=None):
+        salida = StringIO()
+        with mock.patch(RUTA_CONSULTAR_EXTERNOS, return_value=externos or {}):
+            call_command('migrar_a_grabados', *args, '--salida', self.salida, stdout=salida)
+        return salida.getvalue()
+
+    def assertNadaGuardado(self):
+        for modelo in MODELOS_NUEVOS:
+            self.assertFalse(modelo.objects.exists(), modelo.__name__)
+
+    def test_sin_aplicar_no_guarda_nada_y_deja_reporte(self):
+        self.orden('22741')
+        self.orden('22750', estado='EN_MAQUINA')
+        salida = self.migrar()
+
+        self.assertIn('SIMULACIÓN: no se guardó nada', salida)
+        self.assertIn('CUADRA', salida)
+        self.assertNadaGuardado()
+        archivos = os.listdir(self.salida)
+        self.assertEqual(len(archivos), 1)
+        self.assertTrue(archivos[0].startswith('migrar_a_grabados_'))
+
+    def test_agrupa_por_referencia_y_toma_estado_de_la_fila_mas_reciente(self):
+        primera = self.orden('22741', estado='REPETIR', descripcion='FALLO: borde roto', usos_acumulados=3)
+        segunda = self.orden('22900', referencia='22741', creado=DESPUES_DEL_CORTE + timedelta(days=2),
+                             usos_acumulados=4)
+        pendiente = self.orden('22950', referencia='22741', estado='PENDIENTE',
+                               creado=DESPUES_DEL_CORTE + timedelta(days=5), usos_acumulados=9)
+        self.migrar('--aplicar')
+
+        grabado = Grabado.objects.get()
+        self.assertEqual((grabado.of_origen, grabado.proceso, grabado.estado), ('22741', 'STAMPING', 'APROBADO'))
+        self.assertTrue(grabado.aprobado_legado)
+        self.assertFalse(grabado.pruebas_k1.exists())
+        self.assertEqual(grabado.usos_acumulados, 7)  # el PENDIENTE no cuenta
+
+        self.assertEqual(list(grabado.fabricaciones.values_list('numero', 'tipo')),
+                         [(1, 'INICIAL'), (2, 'REPETICION')])
+        inicial = grabado.fabricaciones.get(numero=1)
+        self.assertEqual((inicial.tiempo, inicial.compensacion), ('5h', '0.5mm'))
+        self.assertEqual(inicial.registrado_por, self.operario)
+        self.assertFalse(inicial.revisar_pesos)
+
+        envio = primera.legado.envio
+        self.assertEqual((envio.estado_fisico, envio.comentario), ('REPETIR', 'FALLO: borde roto'))
+        self.assertIsNotNone(envio.recogido_el)
+        self.assertEqual(envio.maquina.nombre, 'GIETZ 01')
+        self.assertEqual(segunda.legado.envio.estado_fisico, 'OK')
+
+        self.assertEqual((primera.legado.rol, segunda.legado.rol), ('FABRICACION', 'FABRICACION'))
+        self.assertEqual(pendiente.legado.rol, 'SIN_MIGRAR')
+        self.assertEqual(pendiente.legado.grabado, grabado)
+        # La API no lo encontró: datos de las filas, sin la descripción "FALLO:".
+        self.assertEqual(grabado.referencia, 'ANILLA LEGADA')
+        self.assertTrue(grabado.datos_manuales)
+
+    def test_en_maquina_queda_con_envio_abierto_y_maquina_comodin(self):
+        orden = self.orden('22741', estado='EN_MAQUINA', maquina=None)
+        self.migrar('--aplicar')
+
+        self.assertEqual(Grabado.objects.get().estado, 'EN_MAQUINA')
+        self.assertEqual(orden.legado.rol, 'FABRICACION')
+        envio = orden.legado.envio
+        self.assertIsNone(envio.recogido_el)
+        self.assertEqual(envio.maquina.nombre, 'SIN MÁQUINA (LEGADO)')
+        self.assertFalse(envio.maquina.activa)
+
+    def test_en_maquina_sin_datos_tecnicos_es_envio_abierto(self):
+        orden = self.orden('22741', estado='EN_MAQUINA', tecnicos=False)
+        self.migrar('--aplicar')
+        self.assertEqual(orden.legado.rol, 'ENVIO_ABIERTO')
+        self.assertIsNone(orden.legado.envio.recogido_el)
+
+    def test_revision_pasa_a_repetir_y_en_proceso_a_aprobado_sin_envio(self):
+        revision = self.orden('22741', estado='REVISION')
+        en_proceso = self.orden('22742', estado='EN_PROCESO', tecnicos=False)
+        self.migrar('--aplicar')
+
+        self.assertEqual(Grabado.objects.get(of_origen='22741').estado, 'REPETIR')
+        self.assertEqual(Grabado.objects.get(of_origen='22742').estado, 'APROBADO')
+        self.assertEqual(revision.legado.envio.estado_fisico, 'REPETIR')
+        self.assertEqual(en_proceso.legado.rol, 'USO')
+        self.assertIsNone(en_proceso.legado.envio)
+
+    def test_datos_de_la_api_y_pesos_anteriores_al_corte(self):
+        self.orden('22741', creado=ANTES_DEL_CORTE)
+        externos = {'22741': info_externa(cliente='CLIENTE API', referencia='REF API', sobre='S-1')}
+        salida = self.migrar('--aplicar', externos=externos)
+
+        grabado = Grabado.objects.get()
+        self.assertEqual((grabado.cliente, grabado.referencia, grabado.sobre),
+                         ('CLIENTE API', 'REF API', 'S-1'))
+        self.assertFalse(grabado.datos_manuales)
+        fabricacion = grabado.fabricaciones.get()
+        self.assertTrue(fabricacion.revisar_pesos)
+        self.assertEqual(fabricacion.peso_inicial, 3000)  # sin convertir
+        self.assertIn('PESOS ANTERIORES', salida)
+
+    def test_unifica_maquinas_por_forma_normalizada(self):
+        Maquina.objects.create(nombre='GIETZ 01')
+        self.orden('22741', maquina='gietz 01')
+        self.orden('22742', maquina=' Gietz   01 ')
+        self.migrar('--aplicar')
+        self.assertEqual(list(Maquina.objects.values_list('nombre', flat=True)), ['GIETZ 01'])
+
+    def test_es_idempotente(self):
+        self.orden('22741')
+        self.orden('22742', estado='PENDIENTE')
+        self.migrar('--aplicar')
+        conteos = [modelo.objects.count() for modelo in MODELOS_NUEVOS]
+
+        salida = self.migrar('--aplicar')
+        self.assertEqual([modelo.objects.count() for modelo in MODELOS_NUEVOS], conteos)
+        self.assertIn('CUADRA', salida)
+
+    def test_reutiliza_grabado_de_alta_y_reporta_conflicto(self):
+        existente = Grabado.objects.create(of_origen='22741', proceso='STAMPING', cliente='ALTA',
+                                           referencia='ALTA', estado='PENDIENTE_K1', usos_acumulados=2)
+        self.orden('22741', usos_acumulados=5)
+        salida = self.migrar('--aplicar')
+
+        self.assertEqual(Grabado.objects.count(), 1)
+        existente.refresh_from_db()
+        self.assertEqual((existente.estado, existente.aprobado_legado, existente.cliente),
+                         ('PENDIENTE_K1', False, 'ALTA'))
+        self.assertEqual(existente.usos_acumulados, 7)
+        self.assertIn('el grabado de Alta está en PENDIENTE_K1', salida)
+
+    def test_conciliacion_que_no_cuadra_revierte_todo(self):
+        self.orden('22741')
+        # 1.ª llamada: alcance; 2.ª: conciliación al final de la transacción.
+        with mock.patch.object(OrdenFabricacion.objects, 'count', side_effect=[1, 99]):
+            with self.assertRaises(CommandError) as error:
+                self.migrar('--aplicar')
+        self.assertIn('no cuadra', str(error.exception))
+        self.assertNadaGuardado()
+
+    def test_api_caida_detiene_sin_guardar(self):
+        self.orden('22741')
+        with mock.patch(RUTA_CONSULTAR_EXTERNOS, side_effect=ConnectionError('sin respuesta')):
+            with self.assertRaises(CommandError) as error:
+                call_command('migrar_a_grabados', '--aplicar', '--salida', self.salida, stdout=StringIO())
+        self.assertIn('La API externa no respondió', str(error.exception))
+        self.assertNadaGuardado()
+
+    def test_no_modifica_orden_fabricacion(self):
+        orden = self.orden('22741', estado='REPETIR')
+        antes = OrdenFabricacion.objects.values().get(pk=orden.pk)
+        self.migrar('--aplicar')
+        self.assertEqual(OrdenFabricacion.objects.values().get(pk=orden.pk), antes)

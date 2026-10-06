@@ -381,6 +381,12 @@ class FabricacionGrabado(models.Model):
     compensacion = models.CharField(max_length=100, null=True, blank=True, verbose_name="Compensación (ml)")
     compensacion_motivo = models.TextField(null=True, blank=True, verbose_name="Motivo del ajuste de compensación")
     bano_ml = models.FloatField(default=0, verbose_name="ML sumados al baño")
+    revisar_pesos = models.BooleanField(
+        default=False,
+        verbose_name="Revisar pesos",
+        help_text="Migrada de una fila anterior al 2026-08-12: los pesos se copiaron tal cual "
+                  "y pueden estar en kg en vez de gramos."
+    )
 
     registrado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,

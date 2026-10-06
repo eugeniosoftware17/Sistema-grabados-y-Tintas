@@ -26,3 +26,6 @@ poblar_api_simulada.py
 # OS
 .DS_Store
 Thumbs.db
+
+# Reportes de migrar_a_grabados (se generan en cada corrida)
+reportes_migracion/
