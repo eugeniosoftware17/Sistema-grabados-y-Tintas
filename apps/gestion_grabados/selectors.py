@@ -9,7 +9,9 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from .models import EnvioMaquina, FabricacionGrabado, Grabado, PruebaK1
-from .services.grabados import es_auto_decision, es_autor_de_k1, puede_decidir_k1
+from .services.grabados import (
+    es_auto_decision, es_autor_de_k1, of_origen_externa, proceso_ausente_en_externo, puede_decidir_k1,
+)
 
 
 def formatear_fecha(valor):
@@ -210,3 +212,117 @@ def inventario_grabados(q='', proceso='', estado=''):
     } for f in filas]
 
     return {'conteos': conteos, 'total': total, 'limite': LIMITE_INVENTARIO, 'data': datos}
+
+
+# ============================================================
+# PLANI (fase 3): estado del grabado de cada fila del Excel
+# ============================================================
+
+# Acción que muestra cada fila del PLANI (la decide el servidor, el JS solo la pinta).
+PLANI_SIN_PROCESO = 'SIN_PROCESO'          # la OF existe en el externo pero sin este proceso
+PLANI_DAR_DE_ALTA = 'DAR_DE_ALTA'          # no hay grabado registrado
+PLANI_SIN_ACCION = 'SIN_ACCION'            # en fabricación / pendiente de K1
+PLANI_MANDAR = 'MANDAR'                    # aprobado y libre
+PLANI_MANDAR_OTRA_VEZ = 'MANDAR_OTRA_VEZ'  # aprobado y esta OF ya se tiró (envío cerrado OK)
+PLANI_RECOGER = 'RECOGER'                  # en máquina con un envío de esta OF
+PLANI_EN_MAQUINA_OTRA = 'EN_MAQUINA_OTRA'  # en máquina con un envío de otra OF
+PLANI_REFABRICAR = 'REFABRICAR'            # marcado para REPETIR
+
+
+def _fecha_corta(valor):
+    return timezone.localtime(valor).strftime('%d/%m') if valor else None
+
+
+def estado_grabados_para_plani(filas, normalizar_of):
+    """Agrega a cada fila del PLANI (dicts con 'of', 'proceso' y los campos *_ext
+    de buscar_datos_externos) la clave 'grabado' con el grabado que le toca, su
+    estado y la acción a mostrar. Solo lectura, en pocas consultas por lote.
+
+    El grabado se resuelve con la OF Referencia de la API para el proceso de la
+    fila (vacía o igual a la propia OF -> la OF es de origen); si la OF no está en
+    la API se usa la propia OF (alta manual). Si la OF ya está en máquina con
+    cualquier grabado, manda ese envío (puede ser otro grabado elegido a mano)."""
+    claves = []
+    for fila in filas:
+        proceso, of = fila['proceso'], str(fila['of'])
+        if proceso_ausente_en_externo(fila, proceso, normalizar_of):
+            claves.append(None)
+        else:
+            claves.append((of_origen_externa(fila, proceso, normalizar_of) or of, proceso))
+
+    origenes = {c[0] for c in claves if c}
+    grabados = {(g.of_origen, g.proceso): g for g in Grabado.objects.filter(of_origen__in=origenes)} if origenes else {}
+
+    abiertos = list(EnvioMaquina.objects.filter(recogido_el__isnull=True).select_related('grabado', 'maquina'))
+    abierto_por_of = {(e.of, e.grabado.proceso): e for e in abiertos}
+    abierto_por_grabado = {e.grabado_id: e for e in abiertos}
+
+    ofs = {str(f['of']) for f in filas}
+    ultimo_cerrado = {}
+    if ofs:
+        for e in (EnvioMaquina.objects.filter(of__in=ofs, recogido_el__isnull=False)
+                  .select_related('grabado').order_by('-recogido_el')):
+            ultimo_cerrado.setdefault((e.of, e.grabado.proceso), e)
+
+    for fila, clave in zip(filas, claves):
+        fila['grabado'] = _estado_fila_plani(
+            fila, clave, grabados, abierto_por_of, abierto_por_grabado, ultimo_cerrado)
+    return filas
+
+
+def _resumen_grabado_plani(grabado, of):
+    return {
+        'id': grabado.id,
+        'of_origen': grabado.of_origen,
+        'proceso': grabado.proceso,
+        'estado': grabado.estado,
+        'estado_display': grabado.get_estado_display(),
+        'ubicacion': grabado.ubicacion,
+        'usa_grabado_de_otra': grabado.of_origen != of,
+    }
+
+
+def _estado_fila_plani(fila, clave, grabados, abierto_por_of, abierto_por_grabado, ultimo_cerrado):
+    proceso, of = fila['proceso'], str(fila['of'])
+    if clave is None:
+        return {'accion': PLANI_SIN_PROCESO, 'grabado': None,
+                'mensaje': f'El sistema externo no tiene {proceso} para esta OF.'}
+
+    propio = abierto_por_of.get((of, proceso))
+    if propio is not None:
+        return {
+            'accion': PLANI_RECOGER,
+            'grabado': _resumen_grabado_plani(propio.grabado, of),
+            'envio': {'id': propio.id, 'of': propio.of, 'maquina': propio.maquina.nombre,
+                      'enviado_el': formatear_fecha(propio.enviado_el)},
+            'terminada_en_planta': fila.get('acabado_ext') == '1',
+            'mensaje': f'En máquina ({propio.maquina.nombre}) desde el {formatear_fecha(propio.enviado_el)}.',
+        }
+
+    grabado = grabados.get(clave)
+    if grabado is None:
+        of_origen = clave[0]
+        mensaje = ('No hay grabado registrado para esta OF.' if of_origen == of else
+                   f'Usa el grabado de la OF {of_origen}, que no está registrado.')
+        return {'accion': PLANI_DAR_DE_ALTA, 'grabado': None, 'mensaje': mensaje,
+                'alta': {'of': of_origen, 'proceso': proceso}}
+
+    resumen = _resumen_grabado_plani(grabado, of)
+    if grabado.estado in ('EN_FABRICACION', 'PENDIENTE_K1'):
+        return {'accion': PLANI_SIN_ACCION, 'grabado': resumen, 'mensaje': grabado.get_estado_display()}
+    if grabado.estado == 'REPETIR':
+        return {'accion': PLANI_REFABRICAR, 'grabado': resumen, 'mensaje': 'Marcado para repetir.',
+                'alta': {'of': grabado.of_origen, 'proceso': proceso}}
+    if grabado.estado == 'EN_MAQUINA':
+        otro = abierto_por_grabado.get(grabado.id)
+        mensaje = f'En máquina con la OF {otro.of}' if otro else 'En máquina (sin envío registrado).'
+        return {'accion': PLANI_EN_MAQUINA_OTRA if otro else PLANI_SIN_ACCION,
+                'grabado': resumen, 'mensaje': mensaje}
+
+    # APROBADO: libre. Si esta OF ya se tiró y se recogió OK, se marca como completada.
+    ultimo = ultimo_cerrado.get((of, proceso))
+    if ultimo is not None and ultimo.estado_fisico == 'OK':
+        return {'accion': PLANI_MANDAR_OTRA_VEZ, 'grabado': resumen,
+                'completada': {'fecha': _fecha_corta(ultimo.recogido_el), 'ubicacion': ultimo.ubicacion},
+                'mensaje': f'Completada el {_fecha_corta(ultimo.recogido_el)}.'}
+    return {'accion': PLANI_MANDAR, 'grabado': resumen, 'mensaje': 'Aprobado y disponible.'}

@@ -17,8 +17,6 @@ urlpatterns = [
     path('api/kpis/', views.api_dashboard_kpis, name='api_kpis'),
     path('api/estadisticas/', views.api_estadisticas_detalladas, name='api_stats_detalladas'),
     path('api/sincronizar/', views.sincronizar_plani, name='api_sincronizar'),
-    path('api/confirmar/', views.confirmar_sincronizacion, name='api_confirmar'),
-    path('api/registrar/', views.api_registrar_actividad, name='api_registrar'),
     path('api/historial/<str:of_numero>/', views.api_historial_orden, name='api_historial'),
     path('api/eliminar/', views.api_eliminar_registro, name='api_eliminar'),
     path('api/bano/', views.api_estado_bano, name='api_estado_bano'),
@@ -41,6 +39,8 @@ urlpatterns = [
     path('api/k1/<int:prueba_id>/aprobar/', views_grabados.api_k1_aprobar, name='api_k1_aprobar'),
     path('api/k1/<int:prueba_id>/rechazar/', views_grabados.api_k1_rechazar, name='api_k1_rechazar'),
     path('api/grabado/<int:grabado_id>/detalle/', views_grabados.api_grabado_detalle, name='api_grabado_detalle'),
+    path('api/plani/mandar-maquina/', views_grabados.api_plani_mandar, name='api_plani_mandar'),
+    path('api/plani/recoger/', views_grabados.api_plani_recoger, name='api_plani_recoger'),
     path('inventario/', views_grabados.inventario_grabados, name='inventario_grabados'),
     path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
 ]

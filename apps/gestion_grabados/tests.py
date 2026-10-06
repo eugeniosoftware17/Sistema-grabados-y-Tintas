@@ -1,21 +1,27 @@
 """
-Pruebas de la fase 2 (alta de grabado y decisión de K1).
+Pruebas de los modelos nuevos: alta de grabado y decisión de K1 (fase 2),
+inventario, y PLANI con envío a máquina y recogida (fase 3).
 
 Los datos externos (API / externa_2012) se simulan con mock: las pruebas solo
 usan la base `default` (test_CigarRingsEIS), que Django crea y borra sola.
 """
 import json
+import os
+import shutil
+import tempfile
 from unittest import mock
 
+import pandas as pd
 from django.contrib.auth.models import Group, User
-from django.test import TestCase
+from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
+from apps.gestion_grabados import selectors
 from apps.gestion_grabados.models import (
     EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, Maquina, OrdenFabricacion, PruebaK1,
 )
 from apps.gestion_grabados.services import grabados as servicio
-from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of
+from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
 
 GRUPO_SUPERVISORES = 'Supervisores de Producción'
 RUTA_BUSCAR_EXTERNOS = 'apps.gestion_grabados.views_grabados.buscar_datos_externos'
@@ -723,3 +729,366 @@ class InventarioGrabadosTests(BaseGrabados):
 
     def test_orden_del_mas_nuevo_al_mas_viejo(self):
         self.assertEqual([g['of_origen'] for g in self.api()['data']], ['22900', '22800', '22741'])
+
+
+# ============================================================
+# PLANI (fase 3): resolución de filas, mandar a máquina y recoger
+# ============================================================
+
+def fila_plani(of, proceso='STAMPING', acabado_ext='0', **ext):
+    """Fila del PLANI tal como la arma sincronizar_plani (Excel + datos externos)."""
+    fila = {'of': of, 'proceso': proceso, 'maquina': 'GIETZ 01', **info_externa(**ext)}
+    fila['acabado_ext'] = acabado_ext
+    return fila
+
+
+def fila_excel(**cambios):
+    datos = {'maquina': 'GIETZ 01', 'fecha_programada': '15/10/2026', 'cantidad_formatos': 1200,
+             'horas_proceso': 2.5, 'papel': 'Couché 90 g'}
+    datos.update(cambios)
+    return datos
+
+
+class BasePlani(BaseGrabados):
+
+    def aprobado(self, of='22741', proceso='STAMPING', info=None):
+        """Grabado APROBADO: alta + K1 aprobado por el supervisor."""
+        resultado = self.registrar(of=of, proceso=proceso, info=info)
+        servicio.decidir_k1(prueba_id=resultado['prueba_k1'].id, usuario=self.supervisor, aprobar=True)
+        return Grabado.objects.get(pk=resultado['grabado'].pk)
+
+    def mandar(self, grabado, of='22741', proceso='STAMPING', **cambios_fila):
+        return servicio.mandar_a_maquina(of=of, proceso=proceso, grabado_id=grabado.id,
+                                         fila=fila_excel(**cambios_fila), usuario=self.operario)
+
+    def recoger(self, envio, of='22741', estado='OK', ubicacion='Cajón A1', comentario=''):
+        return servicio.recoger_de_maquina(envio_id=envio.id, of=of, estado_fisico=estado,
+                                           ubicacion=ubicacion, comentario=comentario,
+                                           usuario=self.operario)
+
+    def resolver(self, *filas):
+        filas = [dict(f) for f in filas]
+        selectors.estado_grabados_para_plani(filas, _normalizar_of)
+        return [f['grabado'] for f in filas]
+
+
+class PlaniResolucionTests(BasePlani):
+
+    def test_sin_grabado_pide_dar_de_alta_con_la_of_de_origen(self):
+        propia, ajena = self.resolver(fila_plani('22741'), fila_plani('23000', of_stamping='22741'))
+        self.assertEqual(propia['accion'], selectors.PLANI_DAR_DE_ALTA)
+        self.assertEqual(propia['alta'], {'of': '22741', 'proceso': 'STAMPING'})
+        # La OF 23000 usa el grabado de la 22741: el alta es de la 22741.
+        self.assertEqual(ajena['alta'], {'of': '22741', 'proceso': 'STAMPING'})
+        self.assertIn('22741', ajena['mensaje'])
+
+    def test_of_no_encontrada_usa_la_propia_of(self):
+        (estado,) = self.resolver(fila_plani('22741', encontrado=False))
+        self.assertEqual(estado['alta'], {'of': '22741', 'proceso': 'STAMPING'})
+
+    def test_proceso_que_no_esta_en_la_api(self):
+        (estado,) = self.resolver(fila_plani('22741', proceso='STAMPING', of_embossing='22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_SIN_PROCESO)
+        self.assertEqual(estado['mensaje'], 'El sistema externo no tiene STAMPING para esta OF.')
+
+    def test_en_fabricacion_o_pendiente_de_k1_sin_accion(self):
+        self.registrar()   # queda PENDIENTE_K1
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_SIN_ACCION)
+        self.assertEqual(estado['grabado']['estado'], 'PENDIENTE_K1')
+
+    def test_aprobado_se_puede_mandar_y_marca_si_usa_grabado_de_otra(self):
+        grabado = self.aprobado()
+        propia, ajena = self.resolver(fila_plani('22741'), fila_plani('23000', of_stamping='22741'))
+        self.assertEqual((propia['accion'], propia['grabado']['id']), (selectors.PLANI_MANDAR, grabado.id))
+        self.assertFalse(propia['grabado']['usa_grabado_de_otra'])
+        self.assertEqual((ajena['accion'], ajena['grabado']['id']), (selectors.PLANI_MANDAR, grabado.id))
+        self.assertTrue(ajena['grabado']['usa_grabado_de_otra'])
+
+    def test_en_maquina_recoger_esta_of_y_bloquear_las_demas(self):
+        grabado = self.aprobado()
+        envio = self.mandar(grabado)
+        propia, ajena = self.resolver(fila_plani('22741', acabado_ext='1'),
+                                      fila_plani('23000', of_stamping='22741'))
+        self.assertEqual(propia['accion'], selectors.PLANI_RECOGER)
+        self.assertEqual(propia['envio']['id'], envio.id)
+        self.assertEqual(propia['envio']['maquina'], 'GIETZ 01')
+        self.assertTrue(propia['terminada_en_planta'])
+        self.assertEqual(ajena['accion'], selectors.PLANI_EN_MAQUINA_OTRA)
+        self.assertEqual(ajena['mensaje'], 'En máquina con la OF 22741')
+
+    def test_recoger_aparece_aunque_se_haya_elegido_otro_grabado(self):
+        self.aprobado()                                  # grabado por defecto de la 22741
+        otro = self.aprobado(of='21000')                 # otro grabado aprobado
+        self.mandar(otro, of='22741')
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_RECOGER)
+        self.assertEqual(estado['grabado']['id'], otro.id)
+        self.assertTrue(estado['grabado']['usa_grabado_de_otra'])
+
+    def test_of_completada_se_puede_mandar_otra_vez(self):
+        envio = self.mandar(self.aprobado())
+        self.recoger(envio, ubicacion='Cajón B2')
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_MANDAR_OTRA_VEZ)
+        self.assertEqual(estado['completada']['ubicacion'], 'Cajón B2')
+        self.assertRegex(estado['completada']['fecha'], r'^\d{2}/\d{2}$')
+
+    def test_repetir_pide_refabricar(self):
+        envio = self.mandar(self.aprobado())
+        self.recoger(envio, estado='REPETIR', comentario='Relieve gastado')
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_REFABRICAR)
+        self.assertEqual(estado['alta'], {'of': '22741', 'proceso': 'STAMPING'})
+
+
+class PlaniMandarTests(BasePlani):
+
+    def test_mandar_copia_los_datos_de_la_fila_y_deja_el_grabado_en_maquina(self):
+        grabado = self.aprobado()
+        envio = self.mandar(grabado, maquina='  gietz   01 ')   # misma normalización que el catálogo
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'EN_MAQUINA')
+        self.assertEqual((envio.of, envio.maquina, envio.enviado_por), ('22741', self.maquina, self.operario))
+        self.assertEqual(str(envio.fecha_programada), '2026-10-15')
+        self.assertEqual((envio.cantidad_formatos, envio.horas_proceso, envio.papel), (1200, 2.5, 'Couché 90 g'))
+        self.assertIsNone(envio.recogido_el)
+
+    def test_maquina_fuera_del_catalogo_inactiva_o_vacia(self):
+        grabado = self.aprobado()
+        casos = (('GIETZ 03', 'no está en el catálogo'), ('GIETZ 99', 'inactiva'), ('', 'no tiene máquina'))
+        for maquina, mensaje in casos:
+            with self.subTest(maquina=maquina):
+                with self.assertRaisesMessage(servicio.ErrorGrabado, mensaje):
+                    self.mandar(grabado, maquina=maquina)
+        self.assertFalse(EnvioMaquina.objects.exists())
+        self.assertFalse(Maquina.objects.filter(nombre='GIETZ 03').exists())   # no se crea sola
+
+    def test_solo_se_manda_un_grabado_aprobado_del_mismo_proceso(self):
+        pendiente = self.registrar()['grabado']     # PENDIENTE_K1
+        with self.assertRaises(servicio.TransicionInvalida):
+            self.mandar(pendiente)
+        embossing = self.aprobado(of='21000', proceso='EMBOSSING')
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'no de STAMPING'):
+            self.mandar(embossing)
+        self.assertFalse(EnvioMaquina.objects.exists())
+
+    def test_no_se_manda_dos_veces(self):
+        grabado = self.aprobado()
+        self.mandar(grabado)
+        with self.assertRaises(servicio.TransicionInvalida):
+            self.mandar(grabado, of='23000')          # el grabado ya está EN_MAQUINA
+        otro = self.aprobado(of='21000')
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'ya está en máquina'):
+            self.mandar(otro, of='22741')             # la OF ya está en máquina con otro grabado
+        self.assertEqual(EnvioMaquina.objects.count(), 1)
+
+    def test_cantidad_de_formula_del_excel_se_redondea(self):
+        envio = self.mandar(self.aprobado(), cantidad_formatos=25248.712595685458)
+        self.assertEqual(envio.cantidad_formatos, 25249)
+
+    def test_fecha_invalida(self):
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'dd/mm/aaaa'):
+            self.mandar(self.aprobado(), fecha_programada='2026-10-15')
+
+
+class PlaniRecogerTests(BasePlani):
+
+    def setUp(self):
+        self.grabado = self.aprobado()
+        self.envio = self.mandar(self.grabado)
+
+    def test_recoger_ok_suma_un_uso_y_vuelve_a_aprobado(self):
+        self.recoger(self.envio, ubicacion='Cajón A1', comentario='Todo bien')
+        self.envio.refresh_from_db()
+        self.grabado.refresh_from_db()
+        self.assertEqual((self.grabado.estado, self.grabado.usos_acumulados, self.grabado.ubicacion),
+                         ('APROBADO', 1, 'Cajón A1'))
+        self.assertEqual((self.envio.estado_fisico, self.envio.ubicacion, self.envio.recogido_por),
+                         ('OK', 'Cajón A1', self.operario))
+        self.assertIsNotNone(self.envio.recogido_el)
+
+    def test_recoger_repetir_exige_comentario(self):
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'explica el motivo'):
+            self.recoger(self.envio, estado='REPETIR', comentario='mal')
+        self.recoger(self.envio, estado='REPETIR', comentario='Relieve gastado')
+        self.grabado.refresh_from_db()
+        self.assertEqual((self.grabado.estado, self.grabado.usos_acumulados), ('REPETIR', 0))
+
+    def test_ubicacion_y_estado_obligatorios(self):
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'ubicación'):
+            self.recoger(self.envio, ubicacion='  ')
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'OK o REPETIR'):
+            self.recoger(self.envio, estado='BUENO')
+
+    def test_el_flujo_nuevo_no_guarda_fotos(self):
+        self.assertNotIn('foto_dano', {campo.name for campo in EnvioMaquina._meta.get_fields()})
+        # OrdenFabricacion conserva sus fotos como histórico.
+        self.assertIn('foto_dano', {campo.name for campo in OrdenFabricacion._meta.get_fields()})
+
+    def test_envio_de_otra_of_o_ya_recogido(self):
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'no de la OF 23000'):
+            self.recoger(self.envio, of='23000')
+        self.recoger(self.envio)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'ya se recogió'):
+            self.recoger(self.envio)
+        self.grabado.refresh_from_db()
+        self.assertEqual(self.grabado.usos_acumulados, 1)   # no se sumó dos veces
+
+
+
+class PlaniVistasTests(BasePlani):
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+
+    def crear_excel(self):
+        carpeta = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, carpeta, ignore_errors=True)
+        ruta = os.path.join(carpeta, 'plani.xlsx')
+        hoja = pd.DataFrame([
+            {'ORDEN': 22741, 'FECHA STAMPING': pd.Timestamp('2026-10-15'), 'REFERENCIA': 'Anilla dorada',
+             'CLIENTE': 'CLIENTE SA', 'HORAS PROCESO': 2, 'PAPEL': 'Couché', 'CANTIDAD  FORMATOS': 1200,
+             'RESPONSABLE': 'GIETZ 01'},
+            {'ORDEN': 23000, 'FECHA STAMPING': pd.Timestamp('2026-10-16'), 'REFERENCIA': 'Otra\r\nanilla',
+             'CLIENTE': 'CLIENTE SA\r', 'HORAS PROCESO': 1, 'PAPEL': 'Couché', 'CANTIDAD  FORMATOS': 800,
+             'RESPONSABLE': 'GIETZ 01'},
+        ])
+        with pd.ExcelWriter(ruta, engine='openpyxl') as escritor:
+            hoja.to_excel(escritor, sheet_name='STAMPING', index=False)
+        return ruta
+
+    def test_sincronizar_agrega_el_estado_del_grabado_y_no_escribe(self):
+        grabado = self.aprobado()
+        externos = {22741: info_externa(of_stamping='22741'), 23000: info_externa(of_stamping='22741')}
+        antes = (Grabado.objects.count(), EnvioMaquina.objects.count(), OrdenFabricacion.objects.count(),
+                 FabricacionGrabado.objects.count())
+        with override_settings(PLANI_EXCEL_PATH=self.crear_excel()), \
+                mock.patch('apps.gestion_grabados.views.buscar_datos_externos_batch', return_value=externos):
+            respuesta = self.client.get(reverse('grabados:api_sincronizar'))
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        filas = {f['of']: f for f in respuesta.json()['data']}
+        self.assertEqual(filas['22741']['grabado']['accion'], selectors.PLANI_MANDAR)
+        self.assertEqual(filas['22741']['grabado']['grabado']['id'], grabado.id)
+        self.assertTrue(filas['23000']['grabado']['grabado']['usa_grabado_de_otra'])
+        # Datos de la fila que se copian al envío (cantidad viene como numpy.int64 del Excel).
+        self.assertEqual((filas['22741']['cantidad_formatos'], filas['22741']['papel']), (1200, 'Couché'))
+        self.assertEqual(filas['22741']['fecha_programada'], '15/10/2026')
+        self.assertNotIn('estado_db', filas['22741'])
+        # Saltos de línea dentro de las celdas (el _x000D_ del Excel real) limpios.
+        self.assertEqual((filas['23000']['cliente'], filas['23000']['descripcion']), ('CLIENTE SA', 'Otra anilla'))
+        despues = (Grabado.objects.count(), EnvioMaquina.objects.count(), OrdenFabricacion.objects.count(),
+                   FabricacionGrabado.objects.count())
+        self.assertEqual(antes, despues)
+
+    def test_mandar_y_recoger_por_api(self):
+        grabado = self.aprobado()
+        respuesta = self.client.post(
+            reverse('grabados:api_plani_mandar'),
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'grabado_id': grabado.id, 'fila': fila_excel()}),
+            content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        envio = EnvioMaquina.objects.get(pk=respuesta.json()['envio_id'])
+
+        respuesta = self.client.post(reverse('grabados:api_plani_recoger'), data={
+            'envio_id': envio.id, 'of': '22741', 'estado_fisico': 'OK', 'ubicacion': 'Cajón C3', 'comentario': '',
+        })
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertIn('Usos acumulados: 1', respuesta.json()['message'])
+
+    def test_errores_por_api(self):
+        grabado = self.aprobado()
+        respuesta = self.client.post(
+            reverse('grabados:api_plani_mandar'),
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'grabado_id': grabado.id,
+                             'fila': fila_excel(maquina='GIETZ 03')}),
+            content_type='application/json')
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('regístrala en el administrador', respuesta.json()['message'])
+        respuesta = self.client.post(reverse('grabados:api_plani_recoger'), data={'envio_id': 999999, 'of': '22741',
+                                                                                   'estado_fisico': 'OK', 'ubicacion': 'X'})
+        self.assertEqual(respuesta.status_code, 400)
+        for nombre in ('api_plani_mandar', 'api_plani_recoger'):
+            self.assertEqual(self.client.get(reverse(f'grabados:{nombre}')).status_code, 405)
+
+    def test_requieren_login_y_csrf(self):
+        grabado = self.aprobado()
+        anonimo = Client()
+        for nombre in ('api_plani_mandar', 'api_plani_recoger'):
+            respuesta = anonimo.post(reverse(f'grabados:{nombre}'))
+            self.assertEqual(respuesta.status_code, 302)
+        estricto = Client(enforce_csrf_checks=True)
+        estricto.force_login(self.operario)
+        respuesta = estricto.post(
+            reverse('grabados:api_plani_mandar'),
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'grabado_id': grabado.id, 'fila': fila_excel()}),
+            content_type='application/json')
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertFalse(EnvioMaquina.objects.exists())
+
+    def test_pagina_plani_sin_datos_tecnicos(self):
+        Maquina.objects.create(nombre='Star  foil')
+        respuesta = self.client.get(reverse('grabados:plani_consulta'))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'id="modal-mandar"')
+        self.assertContains(respuesta, 'id="modal-recoger"')
+        self.assertNotContains(respuesta, 'prod-peso-i')            # ya no hay formulario técnico
+        self.assertNotContains(respuesta, 'type="file"')            # ni fotos de daño
+        self.assertContains(respuesta, '"STAR FOIL"')               # máquinas activas normalizadas
+        self.assertNotContains(respuesta, '"GIETZ 99"')             # inactiva
+
+    def test_endpoints_viejos_eliminados(self):
+        for ruta in ('/grabados/api/registrar/', '/grabados/api/confirmar/'):
+            self.assertEqual(self.client.post(ruta).status_code, 404)
+
+
+class LimpiarTextoExcelTests(TestCase):
+
+    def test_decodifica_los_caracteres_de_control_de_openpyxl(self):
+        casos = {
+            'ADV & Mckay Cigars_x000D_': 'ADV & Mckay Cigars',
+            'Línea 1_x000D__x000A_Línea 2': 'Línea 1 Línea 2',
+            'Tab_x0009_aquí': 'Tab aquí',
+            '  espacios   de más\r\n': 'espacios de más',
+            'Literal _x005F_x000D_ queda': 'Literal _x000D_ queda',   # "_x" literal escapado por Excel
+        }
+        for entrada, esperado in casos.items():
+            with self.subTest(entrada=entrada):
+                self.assertEqual(limpiar_texto_excel(entrada), esperado)
+
+    def test_lo_que_no_es_texto_queda_igual(self):
+        for valor in (22741, 2.5, None):
+            self.assertEqual(limpiar_texto_excel(valor), valor)
+
+
+class FabricacionRetiradaTests(BaseGrabados):
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+
+    def test_pantalla_redirige_a_alta_y_no_esta_en_el_menu(self):
+        respuesta = self.client.get(reverse('grabados:fabricacion'))
+        self.assertRedirects(respuesta, reverse('grabados:alta_grabado'))
+        menu = self.client.get(reverse('grabados:alta_grabado'))
+        self.assertNotContains(menu, f'href="{reverse("grabados:fabricacion")}"')
+
+    def test_ya_no_escribe_en_orden_fabricacion(self):
+        for nombre, datos in (('api_fabricacion_registrar', {'of': '22741', 'proceso': 'STAMPING'}),
+                              ('api_fabricacion_registrar_lote', {'ofs': '22741', 'proceso': 'STAMPING',
+                                                                  'estado': 'COMPLETADO'}),
+                              ('api_fabricacion_editar_ubicacion', {'of': '22741', 'proceso': 'STAMPING'})):
+            with self.subTest(endpoint=nombre):
+                respuesta = self.client.post(reverse(f'grabados:{nombre}'), data=json.dumps(datos),
+                                             content_type='application/json')
+                self.assertEqual(respuesta.status_code, 410)
+                self.assertIn('Alta de Grabado', respuesta.json()['message'])
+        self.assertFalse(OrdenFabricacion.objects.exists())
+
+    def test_pantallas_legadas_marcadas_como_historico(self):
+        for nombre in ('grabado_consulta', 'grabado_estadisticas'):
+            with self.subTest(pantalla=nombre):
+                self.assertContains(self.client.get(reverse(f'grabados:{nombre}')), '(Histórico)')
+
+    def test_alta_acepta_of_y_proceso_en_la_url(self):
+        respuesta = self.client.get(reverse('grabados:alta_grabado') + '?of=22741&proceso=STAMPING')
+        self.assertEqual(respuesta.status_code, 200)

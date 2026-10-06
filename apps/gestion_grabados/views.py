@@ -9,6 +9,7 @@ from django.shortcuts import render
 from django.http import JsonResponse
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
+from . import selectors
 from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
 from django.db.models import Q
@@ -44,6 +45,21 @@ VACIO_INFO_EXTERNA = {
     'proceso_ext': None, 'cliente_ext': '—', 'descripcion_ext': '—',
     'of_stamping_ext': '—', 'of_embossing_ext': '—',
 }
+
+
+# openpyxl deja los caracteres de control de una celda codificados como _xHHHH_
+# (ej. "ADV & Mckay Cigars_x000D_": _x000D_ = retorno de carro). Un "_x" literal
+# viene como "_x005F_x...", que esta misma regla decodifica a "_x..." sin tocarlo.
+_ESCAPE_EXCEL = re.compile(r'_x([0-9A-Fa-f]{4})_')
+
+
+def limpiar_texto_excel(valor):
+    """Decodifica los _xHHHH_ de openpyxl y colapsa saltos de línea, tabulaciones
+    y espacios repetidos en un solo espacio. Lo que no es texto se devuelve igual."""
+    if not isinstance(valor, str):
+        return valor
+    texto = _ESCAPE_EXCEL.sub(lambda m: chr(int(m.group(1), 16)), valor)
+    return ' '.join(texto.split())
 
 
 def _normalizar_of(of_numero):
@@ -219,7 +235,12 @@ def grabado_consulta(request):
 
 @login_required
 def plani_consulta(request):
-    return render(request, 'plani_tabla.html')
+    # Nombres normalizados de las máquinas activas: el JS avisa antes de mandar si
+    # la máquina del Excel no está en el catálogo (el servidor lo valida igual).
+    from .models import Maquina
+    from .services.grabados import normalizar_nombre_maquina
+    maquinas = sorted({normalizar_nombre_maquina(m.nombre) for m in Maquina.objects.filter(activa=True)})
+    return render(request, 'plani_tabla.html', {'maquinas_activas': maquinas})
 
 @login_required
 def api_obtener_registros(request):
@@ -412,7 +433,7 @@ def sincronizar_plani(request):
                     break
 
             df = pd.read_excel(xls, sheet_name=nombre_hoja, header=header_row)
-            df.columns = [str(c).strip().upper() for c in df.columns]
+            df.columns = [' '.join(str(c).split()).upper() for c in df.columns]
 
             mapeo = {
                 'of': ['ORDEN', 'OF', 'ORDEN DE FABRICACIÓN'],
@@ -422,7 +443,10 @@ def sincronizar_plani(request):
                 'fecha_programada': ['FECHA STAMPING', 'FECHA EMBOSSING', 'FECHA', 'DATE', 'FECHA PROG.'],
                 # En el Excel, la columna "RESPONSABLE" contiene el nombre de la máquina
                 # (ej: GIETZ 01, GIETZ 02, STAR FOIL, GTP), no una persona.
-                'maquina': ['RESPONSABLE', 'MAQUINA', 'MÁQUINA']
+                'maquina': ['RESPONSABLE', 'MAQUINA', 'MÁQUINA'],
+                # Se copian al EnvioMaquina al mandar a máquina.
+                'cantidad_formatos': ['CANTIDAD FORMATOS', 'CANTIDAD'],
+                'papel': ['PAPEL'],
             }
 
             columnas_finales = {}
@@ -433,13 +457,6 @@ def sincronizar_plani(request):
                         break
             
             if 'of' not in columnas_finales: continue
-
-            registros_locales = {
-                str(r['of']).strip().upper(): r 
-                for r in OrdenFabricacion.objects.filter(proceso=nombre_hoja).values(
-                    'of', 'responsables', 'estado', 'ubicacion', 'sobre', 'proceso'
-                )
-            }
 
             ofs_procesadas_en_hoja = set()
             filas_validas = []  # (index, of_str, row) de filas únicas y con OF válida
@@ -485,31 +502,15 @@ def sincronizar_plani(request):
                         if pd.isna(val): val = None
                         elif campo == 'fecha_programada':
                             if isinstance(val, pd.Timestamp): val = val.strftime('%d/%m/%Y')
-                            else: val = str(val)
+                            else: val = limpiar_texto_excel(str(val))
+                        elif isinstance(val, str):
+                            val = limpiar_texto_excel(val) or None
+                        elif hasattr(val, 'item'):
+                            val = val.item()  # numpy.int64/float64 -> int/float (JsonResponse no los serializa)
                         item[campo] = val
 
-                    # Enriquecimiento con DB local y externa
-                    registro_eis = registros_locales.get(of_str)
-                    info_ext = datos_externos_hoja.get(int(of_str), dict(VACIO_INFO_EXTERNA))
-                    item.update(info_ext)
-
-                    es_listo_ext = (info_ext.get('acabado_ext') == '1')
-
-                    if registro_eis:
-                        item['status_db'] = 'existente'
-                        item['responsable_db'] = registro_eis['responsables']
-                        item['ubicacion_db'] = registro_eis['ubicacion']
-                        
-                    if es_listo_ext:
-                        if registro_eis and registro_eis['estado'] in ['COMPLETADO', 'REPETIR']:
-                            item['estado_db'] = registro_eis['estado']
-                        else:
-                            item['estado_db'] = 'LISTO_PARA_RECOGER'
-                    elif registro_eis:
-                        item['estado_db'] = registro_eis['estado']
-                    else:
-                        item['estado_db'] = 'PENDIENTE'
-
+                    # Enriquecimiento con la base externa (OF Referencia, acabado, etc.).
+                    item.update(datos_externos_hoja.get(int(of_str), dict(VACIO_INFO_EXTERNA)))
                     datos_totales.append(item)
                     stats['procesados_ok'] += 1
 
@@ -519,127 +520,13 @@ def sincronizar_plani(request):
                     if error_msg not in stats['errores_detalle']:
                         stats['errores_detalle'].append(error_msg)
 
+        # Estado del grabado de cada fila y acción a mostrar (solo lectura: el PLANI
+        # no escribe nada al sincronizar).
+        selectors.estado_grabados_para_plani(datos_totales, _normalizar_of)
         return JsonResponse({'status': 'ok', 'data': datos_totales, 'stats': stats})
 
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
-@login_required
-def api_registrar_actividad(request):
-    if request.method == 'POST':
-        try:
-            # Al usar FormData con archivos, los datos vienen en request.POST, no en el body JSON
-            if request.content_type.startswith('multipart/form-data'):
-                data = request.POST
-            else:
-                data = json.loads(request.body)
-
-            of_num = str(data.get('of')).strip().upper()
-            proceso = data.get('proceso')
-            tipo = data.get('tipo_registro')
-            
-            if not of_num or not proceso:
-                return JsonResponse({'status': 'error', 'message': 'Faltan datos obligatorios'}, status=400)
-
-            # Parsear fecha_programada
-            fecha_prog_str = data.get('fecha_programada')
-            fecha_prog_dt = None
-            if fecha_prog_str and fecha_prog_str != '—':
-                try:
-                    from datetime import datetime
-                    fecha_prog_dt = datetime.strptime(fecha_prog_str, '%d/%m/%Y').date()
-                except:
-                    pass
-
-            from django.utils import timezone
-            obj, created = OrdenFabricacion.objects.get_or_create(
-                of=of_num, proceso=proceso,
-                defaults={
-                    'cliente': data.get('cliente', 'Desconocido'),
-                    'descripcion': data.get('descripcion', '—'),
-                    'referencia': data.get('referencia'),
-                    'fecha_programada': fecha_prog_dt,
-                    'fecha_registro': timezone.now().date(),
-                    'maquina': data.get('maquina'),
-                }
-            )
-
-            # Mantener la máquina al día (viene del Excel en cada sincronización),
-            # incluso si el registro ya existía de antes.
-            if data.get('maquina'):
-                obj.maquina = data.get('maquina')
-
-            bano_info = None
-            if tipo == 'CREAR_FABRICACION':
-                obj.responsables = data.get('responsable')
-                obj.tiempo = data.get('tiempo')
-                obj.peso_inicial = data.get('peso_i')
-                obj.peso_final = data.get('peso_f')
-                # Si la fila venia de REPETIR, descripcion quedo pisada con el
-                # motivo del dano ("Fisico: REPETIR. ..."); al reactivar para
-                # una nueva produccion hay que restaurar la descripcion real
-                # del grabado (la que manda el Plani/Excel).
-                if data.get('descripcion'):
-                    obj.descripcion = data.get('descripcion')
-                try:
-                    pi = float(data.get('peso_i') or 0)  # g
-                    pf = float(data.get('peso_f') or 0)  # g
-                    obj.perdida = max(0, pi - pf)  # gramos
-                except:
-                    obj.perdida = 0
-                obj.temp = data.get('temp'); obj.rpm = data.get('rpm'); obj.compensacion = data.get('compensacion')
-                obj.compensacion_motivo = data.get('compensacion_motivo')
-                obj.estado = 'EN_PROCESO'
-
-                # Compensación de baño: se acumula en el contador único compartido
-                # por todas las máquinas (ver EstadoBano). Cuando llega al límite
-                # hay que avisarle al usuario que toca renovar el agua del baño.
-                bano_ml = (obj.perdida / 1000) * 6.6 if obj.perdida else 0
-                if bano_ml > 0:
-                    estado_bano = EstadoBano.obtener()
-                    estado_bano.ml_acumulados += bano_ml
-                    estado_bano.save()
-                    bano_info = {
-                        'ml_acumulados': round(estado_bano.ml_acumulados, 1),
-                        'limite': EstadoBano.LIMITE_ML,
-                        'alerta': estado_bano.ml_acumulados >= EstadoBano.LIMITE_ML,
-                    }
-            
-            elif tipo == 'ENVIAR_MAQUINA':
-                obj.estado = 'EN_MAQUINA'
-            
-            elif tipo == 'REPORTE_DANO':
-                obj.estado = 'REVISION'
-                obj.descripcion = f"FALLO: {data.get('comentario')}"
-                # Guardar foto si existe
-                if 'foto_dano' in request.FILES:
-                    obj.foto_dano = request.FILES['foto_dano']
-            
-            elif tipo == 'ALMACEN_RECOGER':
-                obj.ubicacion = data.get('ubicacion'); obj.sobre = data.get('sobre')
-                comentario = data.get('comentario', ''); estado_fisico = data.get('estado_fisico', '')
-                if estado_fisico == 'REPETIR':
-                    if not comentario or len(comentario.strip()) < 5:
-                        return JsonResponse({'status': 'error', 'message': 'Comentario obligatorio para repetir'}, status=400)
-                    obj.estado = 'REPETIR'
-                else:
-                    obj.estado = 'COMPLETADO'
-                    obj.usos_acumulados = (obj.usos_acumulados or 0) + 1
-                obj.descripcion = f"Físico: {estado_fisico}. {comentario}"
-
-            obj.save()
-            
-            if request.user.is_authenticated:
-                obj.usuario = request.user
-                obj.save()
-
-            respuesta = {'status': 'ok', 'message': 'Registro EIS actualizado'}
-            if bano_info:
-                respuesta['bano'] = bano_info
-            return JsonResponse(respuesta)
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
 
 @login_required
 def api_estado_bano(request):
@@ -663,27 +550,3 @@ def api_renovar_bano(request):
     eb.renovado_por = request.user.username
     eb.save()
     return JsonResponse({'status': 'ok', 'message': 'Baño renovado. Contador reiniciado.'})
-
-@login_required
-def confirmar_sincronizacion(request):
-    if request.method == 'POST':
-        try:
-            body = json.loads(request.body)
-            datos = body.get('datos', [])
-            creados = 0; actualizados = 0
-            for row in datos:
-                if not row.get('of') or row['of'] == '—': continue
-                obj, created = OrdenFabricacion.objects.update_or_create(
-                    of=str(row['of']), proceso=row.get('proceso', 'General'),
-                    defaults={
-                        'referencia': row.get('referencia'), 'descripcion': row.get('descripcion', '—'),
-                        'cliente': row.get('cliente', 'Desconocido'), 'horas_proceso': row.get('horas_proceso'),
-                        'responsable': row.get('responsable'),
-                    }
-                )
-                if created: creados += 1
-                else: actualizados += 1
-            return JsonResponse({'status': 'ok', 'message': f'Sincronizados: {creados + actualizados}'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)

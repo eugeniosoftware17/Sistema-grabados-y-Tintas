@@ -1,20 +1,22 @@
 """
-Reglas de negocio del grabado como entidad propia (fase 2): alta / fabricación
-de grabados y decisión de pruebas K1.
+Reglas de negocio del grabado como entidad propia: alta / fabricación de
+grabados y decisión de pruebas K1 (fase 2), y envío a máquina / recogida desde
+el PLANI (fase 3).
 
 Las vistas (views_grabados.py) solo parsean el request y llaman a estas
-funciones; todo lo que cambia estado pasa por acá, dentro de transaction.atomic
+funciones; todo lo que cambia estado pasa por aquí, dentro de transaction.atomic
 y con select_for_update sobre el grabado para que dos usuarios no pisen la
 misma transición a la vez.
 """
 import math
+from datetime import datetime
 
 from django.db import IntegrityError, transaction
 from django.db.models import F, Max, Q
 from django.utils import timezone
 
 from ..models import (
-    EstadoBano, FabricacionGrabado, Grabado, Maquina, OrdenFabricacion, PruebaK1,
+    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, Maquina, OrdenFabricacion, PruebaK1,
 )
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
@@ -143,6 +145,15 @@ def of_origen_externa(info_externa, proceso, normalizar_of):
     return str(of_int) if of_int is not None else None
 
 
+def proceso_ausente_en_externo(info_externa, proceso, normalizar_of):
+    """True si la OF existe en el sistema externo con el OTRO proceso pero no con
+    `proceso` (casi seguro se eligió mal). Si no tiene ninguno de los dos (fila
+    con los campos vacíos) devuelve False: no hay información para bloquear."""
+    otro_proceso = 'EMBOSSING' if proceso == 'STAMPING' else 'STAMPING'
+    return (of_origen_externa(info_externa, proceso, normalizar_of) is None
+            and of_origen_externa(info_externa, otro_proceso, normalizar_of) is not None)
+
+
 def tiene_historial_legado(of_origen, proceso):
     """Filas del sistema viejo (OrdenFabricacion) todavía no migradas que
     corresponden a este grabado: la propia OF o una OF que la usa como referencia."""
@@ -198,9 +209,7 @@ def evaluar_alta(of_origen, proceso, info_externa, normalizar_of, grabado=None, 
     # casi seguro se eligió mal el proceso. Si no tiene ninguno de los dos
     # (fila con los campos vacíos), no hay información para bloquear y se deja
     # el alta como con una OF no encontrada.
-    otro_proceso = 'EMBOSSING' if proceso == 'STAMPING' else 'STAMPING'
-    if (origen_api is None
-            and of_origen_externa(info_externa, otro_proceso, normalizar_of) is not None):
+    if proceso_ausente_en_externo(info_externa, proceso, normalizar_of):
         resultado.update(
             bloqueo=BLOQUEO_SIN_PROCESO,
             mensaje=f'Esta OF no tiene {proceso} en el sistema externo; revisa el proceso.',
@@ -406,3 +415,148 @@ def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
         grabado.save(update_fields=['estado', 'actualizado_el'])
 
     return prueba
+
+
+# ============================================================
+# PLANI (fase 3): mandar a máquina y recoger
+# ============================================================
+
+ESTADOS_FISICOS = ('OK', 'REPETIR')
+LARGO_MINIMO_COMENTARIO_REPETIR = 5
+
+
+def normalizar_nombre_maquina(texto):
+    """Mayúsculas y espacios colapsados: 'gietz  01 ' -> 'GIETZ 01'. Es la misma
+    regla que usará migrar_a_grabados al cargar el catálogo."""
+    return ' '.join(str(texto or '').split()).upper()
+
+
+def resolver_maquina(nombre):
+    """Máquina activa del catálogo para el nombre que trae el Excel. No crea nada:
+    si no existe o está inactiva, el envío se bloquea con un mensaje claro."""
+    buscado = normalizar_nombre_maquina(nombre)
+    if not buscado:
+        raise ErrorGrabado('La fila del Excel no tiene máquina asignada: no se puede mandar a máquina.')
+    for maquina in Maquina.objects.all():
+        if normalizar_nombre_maquina(maquina.nombre) == buscado:
+            if not maquina.activa:
+                raise ErrorGrabado(f'La máquina "{maquina.nombre}" está inactiva en el catálogo; '
+                                   'actívala en el administrador para poder usarla.')
+            return maquina
+    raise ErrorGrabado(f'La máquina "{buscado}" no está en el catálogo; regístrala en el administrador '
+                       '(Gestión de grabados > Máquinas) y vuelve a intentarlo.')
+
+
+def _fecha_excel(valor):
+    texto = _texto(valor)
+    if not texto or texto == '—':
+        return None
+    try:
+        return datetime.strptime(texto, '%d/%m/%Y').date()
+    except ValueError:
+        raise ErrorGrabado(f'La fecha programada "{texto}" no tiene el formato dd/mm/aaaa.')
+
+
+def _datos_fila_excel(fila):
+    """Valida y convierte los datos de la fila del Excel que se copian al envío."""
+    fila = fila or {}
+    cantidad = _numero(fila, 'cantidad_formatos', 'Cantidad de formatos', obligatorio=False)
+    return {
+        'fecha_programada': _fecha_excel(fila.get('fecha_programada')),
+        # Puede venir de una fórmula del Excel (25248.71...): se redondea.
+        'cantidad_formatos': math.floor(cantidad + 0.5) if cantidad is not None else None,
+        'horas_proceso': _numero(fila, 'horas_proceso', 'Horas de proceso', obligatorio=False),
+        'papel': _texto(fila.get('papel'))[:100] or None,
+    }
+
+
+def mandar_a_maquina(*, of, proceso, grabado_id, fila, usuario):
+    """Crea el EnvioMaquina de una OF del PLANI con el grabado elegido (por defecto
+    el de su OF Referencia; el usuario puede elegir otro APROBADO del mismo proceso)
+    y deja el grabado EN_MAQUINA. `fila` son los datos de la fila del Excel: máquina,
+    fecha programada, cantidad de formatos, horas y papel."""
+    if proceso not in PROCESOS_VALIDOS:
+        raise ErrorGrabado('Proceso inválido.')
+    if not of:
+        raise ErrorGrabado('Falta la OF.')
+    maquina = resolver_maquina((fila or {}).get('maquina'))
+    datos_fila = _datos_fila_excel(fila)
+
+    try:
+        with transaction.atomic():
+            try:
+                grabado = Grabado.objects.select_for_update().get(pk=grabado_id)
+            except (Grabado.DoesNotExist, ValueError, TypeError):
+                raise ErrorGrabado('El grabado elegido no existe.')
+            if grabado.proceso != proceso:
+                raise ErrorGrabado(f'El grabado {grabado.of_origen} es de {grabado.proceso}, '
+                                   f'no de {proceso}.')
+            if grabado.estado != 'APROBADO':
+                raise TransicionInvalida(f'El grabado {grabado.of_origen} {grabado.proceso} está en '
+                                         f'"{grabado.get_estado_display()}": solo se manda a máquina '
+                                         'un grabado aprobado.')
+            otro_envio = (EnvioMaquina.objects.select_related('grabado')
+                          .filter(of=of, grabado__proceso=proceso, recogido_el__isnull=True).first())
+            if otro_envio:
+                raise TransicionInvalida(f'La OF {of} ya está en máquina con el grabado '
+                                         f'{otro_envio.grabado.of_origen}. Recógela antes de volver a mandarla.')
+
+            envio = EnvioMaquina.objects.create(
+                grabado=grabado, of=of, maquina=maquina,
+                enviado_por=usuario, enviado_el=timezone.now(), **datos_fila,
+            )
+            grabado.estado = 'EN_MAQUINA'
+            grabado.save(update_fields=['estado', 'actualizado_el'])
+    except IntegrityError:
+        # Índice filtrado envio_uno_abierto_por_grabado: otro usuario lo mandó a la vez.
+        raise TransicionInvalida('Ese grabado acaba de mandarse a máquina con otra OF. '
+                                 'Actualiza el PLANI para ver su estado.')
+    return envio
+
+
+def recoger_de_maquina(*, envio_id, of, estado_fisico, ubicacion, comentario, usuario):
+    """Cierra el envío abierto de la OF. OK: suma un uso y el grabado vuelve a
+    APROBADO. REPETIR: el grabado queda en REPETIR (comentario obligatorio).
+    En ambos casos se guarda la ubicación en el envío y en el grabado."""
+    estado_fisico = _texto(estado_fisico).upper()
+    if estado_fisico not in ESTADOS_FISICOS:
+        raise ErrorGrabado('Selecciona el estado físico del grabado: OK o REPETIR.')
+    ubicacion = _texto(ubicacion)
+    if not ubicacion:
+        raise ErrorGrabado('Ingresa la ubicación física donde queda el grabado.')
+    comentario = _texto(comentario)
+    if estado_fisico == 'REPETIR' and len(comentario) < LARGO_MINIMO_COMENTARIO_REPETIR:
+        raise ErrorGrabado(f'Para mandar el grabado a REPETIR explica el motivo en el comentario '
+                           f'(al menos {LARGO_MINIMO_COMENTARIO_REPETIR} caracteres).')
+
+    with transaction.atomic():
+        try:
+            envio = EnvioMaquina.objects.select_for_update().get(pk=envio_id)
+        except (EnvioMaquina.DoesNotExist, ValueError, TypeError):
+            raise ErrorGrabado('El envío no existe.')
+        grabado = Grabado.objects.select_for_update().get(pk=envio.grabado_id)
+
+        if envio.recogido_el is not None:
+            raise TransicionInvalida('Este envío ya se recogió el '
+                                     f'{timezone.localtime(envio.recogido_el):%d/%m/%Y %H:%M}.')
+        if str(envio.of) != str(of):
+            raise TransicionInvalida(f'El envío es de la OF {envio.of}, no de la OF {of}.')
+        if grabado.estado != 'EN_MAQUINA':
+            raise TransicionInvalida(f'El grabado está en "{grabado.get_estado_display()}", no en máquina.')
+
+        envio.recogido_por = usuario
+        envio.recogido_el = timezone.now()
+        envio.estado_fisico = estado_fisico
+        envio.comentario = comentario or None
+        envio.ubicacion = ubicacion
+        envio.save()
+
+        grabado.ubicacion = ubicacion
+        if estado_fisico == 'OK':
+            grabado.estado = 'APROBADO'
+            grabado.usos_acumulados = F('usos_acumulados') + 1
+        else:
+            grabado.estado = 'REPETIR'
+        grabado.save(update_fields=['estado', 'ubicacion', 'usos_acumulados', 'actualizado_el'])
+        grabado.refresh_from_db(fields=['usos_acumulados'])
+    return envio

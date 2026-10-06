@@ -250,3 +250,61 @@ def api_inventario(request):
     if estado and estado not in selectors.ESTADOS_GRABADO:
         return _error('Estado inválido.')
     return JsonResponse({'status': 'ok', **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado)})
+
+
+# ============================================================
+# PLANI (fase 3): mandar a máquina y recoger
+# ============================================================
+
+@login_required
+def api_plani_mandar(request):
+    """Manda a máquina el grabado de una OF del PLANI. JSON:
+    {of, proceso, grabado_id, fila: {maquina, fecha_programada, cantidad_formatos,
+    horas_proceso, papel}}. La máquina se resuelve contra el catálogo en el servidor."""
+    if request.method != 'POST':
+        return _error('Método no permitido', status=405)
+    data = _leer_json(request)
+    if data is None:
+        return _error('Datos inválidos.')
+    of = _of_normalizada(str(data.get('of', '')).strip())
+    proceso = str(data.get('proceso', '')).strip().upper()
+    try:
+        envio = servicio.mandar_a_maquina(
+            of=of, proceso=proceso, grabado_id=data.get('grabado_id'),
+            fila=data.get('fila') or {}, usuario=request.user,
+        )
+    except servicio.ErrorGrabado as e:
+        return _error(e.mensaje, status=e.status)
+    return JsonResponse({
+        'status': 'ok',
+        'message': f'OF {envio.of} en máquina ({envio.maquina}) con el grabado '
+                   f'{envio.grabado.of_origen} {envio.grabado.proceso}.',
+        'envio_id': envio.id,
+    })
+
+
+@login_required
+def api_plani_recoger(request):
+    """Recoge de máquina el grabado de una OF. multipart/form-data:
+    envio_id, of, estado_fisico (OK | REPETIR), ubicacion, comentario."""
+    if request.method != 'POST':
+        return _error('Método no permitido', status=405)
+    datos = request.POST
+    try:
+        envio = servicio.recoger_de_maquina(
+            envio_id=datos.get('envio_id'),
+            of=_of_normalizada(str(datos.get('of', '')).strip()),
+            estado_fisico=datos.get('estado_fisico'),
+            ubicacion=datos.get('ubicacion'),
+            comentario=datos.get('comentario'),
+            usuario=request.user,
+        )
+    except servicio.ErrorGrabado as e:
+        return _error(e.mensaje, status=e.status)
+    grabado = envio.grabado
+    if envio.estado_fisico == 'OK':
+        mensaje = (f'Grabado {grabado.of_origen} recogido y guardado en {envio.ubicacion}. '
+                   f'Usos acumulados: {grabado.usos_acumulados}.')
+    else:
+        mensaje = f'Grabado {grabado.of_origen} recogido y marcado para REPETIR.'
+    return JsonResponse({'status': 'ok', 'message': mensaje})

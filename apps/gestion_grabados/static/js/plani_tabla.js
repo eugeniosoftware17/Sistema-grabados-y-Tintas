@@ -1,484 +1,448 @@
-
 /* ============================================================
-   Lógica para la Tabla PLANI - SINCRONIZACIÓN AUTOMÁTICA
+   PLANI (fase 3): mandar el grabado a máquina y recogerlo.
+   - La acción de cada fila la decide el servidor (fila.grabado.accion,
+     ver selectors.estado_grabados_para_plani); aquí solo se pinta.
+   - Ya no se cargan datos técnicos: eso es Alta de Grabado.
+   - El detalle del grabado se abre con el componente PanelGrabado.
    ============================================================ */
 
-let DATOS_PLANI = [];
-let registrosFiltrados = [];
-let paginaActual = 1;
-const REGISTROS_POR_PAGINA = 10000; // Mostrar todo sin paginación
-let registroActivoIndex = null;
-let modoReporteDano = false;
-let compensacionRecomendada = 0;
+(function () {
+    'use strict';
 
-function getCookie(name) {
-    const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-    return match ? decodeURIComponent(match[2]) : null;
-}
+    let datosPlani = [];
+    let filtrados = [];
+    let filaActiva = null;            // fila del modal abierto
+    let grabadoElegido = null;        // {id, of_origen} para mandar a máquina
+    let pedidoOtros = 0;
 
-function parsearFechaProgramada(str) {
-    if (!str || str === '—') return null;
-    const partes = str.split('/');
-    if (partes.length !== 3) return null;
-    return new Date(partes[2], partes[1] - 1, partes[0]).getTime();
-}
+    const $ = (id) => document.getElementById(id);
+    const MAQUINAS_ACTIVAS = new Set(JSON.parse($('plani-maquinas-activas').textContent || '[]'));
+    const LARGO_MINIMO_COMENTARIO = 5;
 
-function finDeSemanaActual() {
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-    const diaSemana = hoy.getDay(); // 0=domingo ... 6=sábado
-    const diasHastaDomingo = diaSemana === 0 ? 0 : 7 - diaSemana;
-    const domingo = new Date(hoy);
-    domingo.setDate(hoy.getDate() + diasHastaDomingo);
-    domingo.setHours(23, 59, 59, 999);
-    return domingo.getTime();
-}
+    // ---------------------------------------------------------- utilidades
+    function getCookie(name) {
+        const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return match ? decodeURIComponent(match[2]) : null;
+    }
 
-// Función que dispara la sincronización desde el servidor
-function sincronizarConExcel() {
-    const btn = document.getElementById('btn-sincronizar');
-    const overlay = document.getElementById('overlay-proceso');
-    const overlayTitulo = document.getElementById('overlay-titulo');
-    const overlayMensaje = document.getElementById('overlay-mensaje');
-    
-    overlayTitulo.innerText = "Consultando Datos...";
-    overlayMensaje.innerText = "Sincronizando Excel con bases de datos de producción...";
-    overlay.style.display = 'flex';
-    
-    btn.disabled = true;
-    const startTime = Date.now();
+    function escapar(valor) {
+        const div = document.createElement('div');
+        div.textContent = valor === null || valor === undefined || valor === '' ? '—' : String(valor);
+        return div.innerHTML;
+    }
 
-    fetch('/grabados/api/sincronizar/')
-        .then(response => response.json())
-        .then(res => {
-            // Eliminamos la espera artificial (setTimeout) para que sea instantáneo
-            if (res.status === 'ok') {
-                DATOS_PLANI = res.data;
-                registrosFiltrados = [...DATOS_PLANI];
-                paginaActual = 1;
-                renderizarTabla();
-                
-                const s = res.stats;
-                overlayTitulo.innerText = "¡Sincronización Completada!";
-                overlayMensaje.innerHTML = `
-                    <div style="text-align: left; margin-top: 15px; background: #f9f9f9; padding: 15px; border-radius: 10px; border: 1px solid #ddd; max-height: 250px; overflow-y: auto;">
-                        <p>📊 <strong>Total en Excel:</strong> ${s.total_filas_excel}</p>
-                        <p style="color: #2d8a3e;">✅ <strong>Cargados con éxito:</strong> ${s.procesados_ok}</p>
-                        <p style="color: #f39c12;">📑 <strong>Duplicados omitidos:</strong> ${s.duplicados_omitidos || 0}</p>
-                        <p style="color: ${s.con_error > 0 ? '#d32f2f' : '#666'};">❌ <strong>Con errores/vacíos:</strong> ${s.con_error}</p>
-                        ${s.errores_detalle && s.errores_detalle.length > 0 ? `
-                            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #eee; font-size: 11px; color: #d32f2f;">
-                                <strong>Detalle de errores:</strong><br>
-                                ${s.errores_detalle.slice(0, 5).map(e => `• ${e}`).join('<br>')}
-                                ${s.errores_detalle.length > 5 ? '<br>... y más errores.' : ''}
-                            </div>
-                        ` : ''}
-                    </div>
-                    <button class="boton boton--primario" onclick="document.getElementById('overlay-proceso').style.display='none'" style="margin-top: 20px; width: 100%; background-color: #2d8a3e;">Continuar</button>
-                `;
+    function sinDato(valor) {
+        return valor === null || valor === undefined || String(valor).trim() === '' || valor === '—';
+    }
 
-                // Ya no se cierra solo, el usuario debe pulsar 'Continuar'
-            } else {
+    function numero(valor, decimales) {
+        if (sinDato(valor) || !Number.isFinite(Number(valor))) return valor;
+        return Number(valor).toLocaleString('es-DO', { maximumFractionDigits: decimales });
+    }
+
+    function normalizarMaquina(texto) {
+        return String(texto || '').split(/\s+/).filter(Boolean).join(' ').toUpperCase();
+    }
+
+    function etiqueta(codigo, texto) {
+        return `<span class="pg-etiqueta pg-etiqueta--${escapar(codigo)}">${escapar(texto)}</span>`;
+    }
+
+    function debounce(fn, espera) {
+        let t;
+        return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), espera); };
+    }
+
+    function mostrarAviso(id, clase, texto) {
+        const el = $(id);
+        el.className = 'aviso ' + clase;
+        el.textContent = texto;
+        el.style.display = 'block';
+    }
+
+    function abrirModal(id) { $(id).style.display = 'flex'; }
+    function cerrarModal(id) { $(id).style.display = 'none'; filaActiva = null; }
+
+    function postJson(url, datos) {
+        return fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify(datos),
+        }).then(r => r.json());
+    }
+
+    // ------------------------------------------------------- sincronización
+    function sincronizar(silencioso) {
+        const btn = $('btn-sincronizar');
+        const overlay = $('overlay-proceso');
+        if (!silencioso) {
+            $('overlay-titulo').textContent = 'Consultando datos...';
+            $('overlay-mensaje').textContent = 'Leyendo el Excel de planificación y el estado de los grabados.';
+            $('overlay-spinner').style.display = 'block';
+            overlay.style.display = 'flex';
+        }
+        btn.disabled = true;
+
+        return fetch('/grabados/api/sincronizar/')
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'ok') {
+                    overlay.style.display = 'none';
+                    alert('Error: ' + res.message);
+                    return;
+                }
+                datosPlani = res.data;
+                aplicarBusqueda();
+                $('btn-exportar').disabled = !datosPlani.length;
+                if (!silencioso) mostrarResumenSincronizacion(res.stats);
+            })
+            .catch(() => {
                 overlay.style.display = 'none';
-                alert('Error: ' + res.message);
-            }
-        })
-        .catch(error => {
-            overlay.style.display = 'none';
-            console.error('Error:', error);
-            alert('Error de conexión con el servidor.');
-        })
-        .finally(() => {
-            btn.disabled = false;
+                alert('Error de conexión con el servidor.');
+            })
+            .finally(() => { btn.disabled = false; });
+    }
+
+    function mostrarResumenSincronizacion(s) {
+        $('overlay-spinner').style.display = 'none';
+        $('overlay-titulo').textContent = '¡Sincronización completada!';
+        const errores = (s.errores_detalle || []).slice(0, 5).map(e => `<li>${escapar(e)}</li>`).join('');
+        $('overlay-mensaje').innerHTML = `
+            <div style="text-align:left; margin-top:15px; background:#f9f9f9; padding:15px; border-radius:10px; border:1px solid #ddd; max-height:250px; overflow-y:auto;">
+                <p>📊 <strong>Filas en el Excel:</strong> ${escapar(s.total_filas_excel)}</p>
+                <p style="color:#2d8a3e;">✅ <strong>Cargadas:</strong> ${escapar(s.procesados_ok)}</p>
+                <p style="color:#f39c12;">📑 <strong>Duplicadas omitidas:</strong> ${escapar(s.duplicados_omitidos || 0)}</p>
+                <p style="color:${s.con_error > 0 ? '#d32f2f' : '#666'};">❌ <strong>Con errores o vacías:</strong> ${escapar(s.con_error)}</p>
+                ${errores ? `<ul style="margin-top:10px; font-size:11px; color:#d32f2f;">${errores}</ul>` : ''}
+            </div>
+            <button type="button" class="boton boton--primario" id="overlay-continuar"
+                    style="margin-top:20px; width:100%; background-color:#2d8a3e;">Continuar</button>`;
+        $('overlay-continuar').addEventListener('click', () => { $('overlay-proceso').style.display = 'none'; });
+        $('overlay-continuar').focus();
+    }
+
+    // ---------------------------------------------------------------- render
+    function textoGrabadoDeOtra(g) {
+        return g && g.usa_grabado_de_otra ? `<span class="plani-nota">Grabado de la OF ${escapar(g.of_origen)}</span>` : '';
+    }
+
+    function botonVer(g) {
+        return g ? `<button type="button" class="plani-enlace" data-accion="ver">Ver grabado</button>` : '';
+    }
+
+    function celdaGestion(fila) {
+        const e = fila.grabado || {};
+        const g = e.grabado;
+        switch (e.accion) {
+            case 'SIN_PROCESO':
+                return `${etiqueta('neutra', 'Sin datos del proceso')}<span class="plani-nota">${escapar(e.mensaje)}</span>`;
+            case 'DAR_DE_ALTA':
+                return `<span class="plani-nota">${escapar(e.mensaje)}</span>
+                    <div class="plani-gestion__botones">
+                        <button type="button" class="boton boton--primario boton--chico" data-accion="alta">Dar de alta</button>
+                    </div>`;
+            case 'SIN_ACCION':
+                return `${etiqueta(g.estado, g.estado_display)}${textoGrabadoDeOtra(g)}${botonVer(g)}`;
+            case 'MANDAR':
+                return `${etiqueta(g.estado, g.estado_display)}
+                    ${g.ubicacion ? `<span class="plani-nota">📍 ${escapar(g.ubicacion)}</span>` : ''}${textoGrabadoDeOtra(g)}
+                    <div class="plani-gestion__botones">
+                        <button type="button" class="boton boton--primario boton--chico" data-accion="mandar">Mandar a máquina</button>
+                    </div>${botonVer(g)}`;
+            case 'MANDAR_OTRA_VEZ':
+                return `<span class="plani-nota plani-nota--ok">✓ Completada el ${escapar(e.completada.fecha)}${
+                        e.completada.ubicacion ? ' · ' + escapar(e.completada.ubicacion) : ''}</span>${textoGrabadoDeOtra(g)}
+                    <div class="plani-gestion__botones">
+                        <button type="button" class="boton boton--secundario boton--chico" data-accion="mandar-otra-vez">Mandar otra vez</button>
+                    </div>${botonVer(g)}`;
+            case 'RECOGER':
+                return `${etiqueta('EN_MAQUINA', 'En máquina')}
+                    ${e.terminada_en_planta ? '<span class="plani-terminada">Terminada en planta</span>' : ''}
+                    <span class="plani-nota">${escapar(e.mensaje)}</span>${textoGrabadoDeOtra(g)}
+                    <div class="plani-gestion__botones">
+                        <button type="button" class="boton boton--chico" style="background:#1565c0; color:#fff;" data-accion="recoger">Recoger</button>
+                    </div>${botonVer(g)}`;
+            case 'EN_MAQUINA_OTRA':
+                return `${etiqueta('EN_MAQUINA', e.mensaje)}${textoGrabadoDeOtra(g)}${botonVer(g)}`;
+            case 'REFABRICAR':
+                return `${etiqueta(g.estado, g.estado_display)}${textoGrabadoDeOtra(g)}
+                    <div class="plani-gestion__botones">
+                        <button type="button" class="boton boton--primario boton--chico" data-accion="refabricar">Refabricar</button>
+                    </div>${botonVer(g)}`;
+            default:
+                return '—';
+        }
+    }
+
+    function renderizarTabla() {
+        const cuerpo = $('tabla-cuerpo');
+        $('plani-contador').textContent = datosPlani.length ? `${filtrados.length} de ${datosPlani.length} fila(s)` : '';
+        $('pie-info').textContent = datosPlani.length ? `Total en el Excel: ${datosPlani.length} fila(s)` : '';
+
+        if (!datosPlani.length) {
+            cuerpo.innerHTML = '<tr><td colspan="8" class="tabla-sin-resultados">Presiona "Actualizar desde Excel" para cargar la programación.</td></tr>';
+            return;
+        }
+        if (!filtrados.length) {
+            cuerpo.innerHTML = '<tr><td colspan="8" class="tabla-sin-resultados">Ninguna fila coincide con la búsqueda.</td></tr>';
+            return;
+        }
+        cuerpo.innerHTML = filtrados.map(fila => {
+            const indice = datosPlani.indexOf(fila);
+            const terminada = fila.grabado && fila.grabado.terminada_en_planta;
+            return `
+            <tr class="${terminada ? 'plani-fila--terminada' : ''}" data-indice="${indice}">
+                <td data-label="OF"><strong>${escapar(fila.of)}</strong></td>
+                <td data-label="OF Ref.">${escapar(sinDato(fila.ref_ext) ? '' : fila.ref_ext)}</td>
+                <td data-label="Descripción" class="plani-descripcion">${escapar(fila.descripcion)}</td>
+                <td data-label="Cliente">${escapar(fila.cliente)}</td>
+                <td data-label="Proceso">${escapar(fila.proceso)}</td>
+                <td data-label="Máquina">${escapar(fila.maquina)}</td>
+                <td data-label="Fecha prog.">${escapar(fila.fecha_programada)}</td>
+                <td data-label="Grabado" class="plani-celda-gestion"><div class="plani-gestion">${celdaGestion(fila)}</div></td>
+            </tr>`;
+        }).join('');
+    }
+
+    function aplicarBusqueda() {
+        const palabras = $('buscador-input').value.toLowerCase().split(/\s+/).filter(Boolean);
+        filtrados = datosPlani.filter(f => {
+            const texto = [f.of, f.ref_ext, f.cliente, f.descripcion].map(v => String(v || '').toLowerCase()).join(' ');
+            return palabras.every(p => texto.includes(p));
         });
-}
-
-function renderizarTabla() {
-    const inicio = (paginaActual - 1) * REGISTROS_POR_PAGINA;
-    const pagina = registrosFiltrados.slice(inicio, inicio + REGISTROS_POR_PAGINA);
-    const tbody = document.getElementById('tabla-cuerpo');
-    
-    if (!tbody) return;
-    
-    if (pagina.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="10" class="tabla-sin-resultados">Haga clic en "Actualizar" para ver la vista previa.</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = pagina.map((reg, idx) => {
-        const globalIdx = inicio + idx;
-        
-        // --- LÓGICA DE GESTIÓN UNIFICADA ---
-        let gestionHTML = "";
-        let estadoLabel = reg.estado_db || 'PENDIENTE';
-        let estadoClase = 'estado--pendiente';
-
-        if (estadoLabel === 'PENDIENTE') {
-            if (reg.status_db === 'existente') {
-                // Ya existe en la base (ej. alta manual desde Fabricación) pero
-                // todavia no paso por un ciclo de produccion: queda guardado,
-                // sin accion disponible hasta que se complete un ciclo real.
-                estadoClase = 'estado--completado';
-                gestionHTML = `<span class="celda-estado ${estadoClase}">GUARDADO</span>`;
-            } else {
-                gestionHTML = `<button class="boton boton--primario" onclick="abrirDashboard(${globalIdx})" style="padding: 5px 10px; font-size: 11px;">Iniciar Producción</button>`;
-            }
-        } 
-        else if (estadoLabel === 'EN_PROCESO') {
-            estadoClase = 'estado--en-proceso';
-            gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
-                    <span class="celda-estado ${estadoClase}" onclick="abrirDashboard(${globalIdx})" style="cursor:pointer;" title="Clic para reportar daño">EN PREPARACIÓN ⚙️</span>
-                    <div style="display:flex; gap:3px;">
-                        <button class="boton" onclick="enviarAMaquina(${globalIdx})" style="flex:1; padding: 3px 5px; font-size: 9px; background-color: #f39c12; color: white;">A Máquina</button>
-                        <button class="boton" onclick="abrirDashboard(${globalIdx})" style="flex:1; padding: 3px 5px; font-size: 9px; background-color: #d32f2f; color: white;">Reportar Daño</button>
-                    </div>
-                </div>
-            `;
-        }
-        else if (estadoLabel === 'EN_MAQUINA') {
-            estadoClase = 'estado--en-proceso'; // Usar color naranja/amarillo
-            gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
-                    <span class="celda-estado" style="background-color: #fff3e0; color: #e65100; border: 1px solid #ffe0b2;">EN MÁQUINA</span>
-                    <small style="color: #666; font-size: 9px;">Esperando fin de proceso...</small>
-                </div>
-            `;
-        }
-        else if (estadoLabel === 'LISTO_PARA_RECOGER') {
-            estadoClase = 'estado--en-revision'; // Azul
-            gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
-                    <span class="celda-estado" style="background-color: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb;">LISTO PARA RECOGER</span>
-                    <button class="boton" onclick="abrirDashboard(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Recoger de Máquina</button>
-                </div>
-            `;
-        }
-        else if (estadoLabel === 'COMPLETADO') {
-            estadoClase = 'estado--completado';
-            const tsFechaProg = parsearFechaProgramada(reg.fecha_programada);
-            const esFuturaFueraDeEstaSemana = tsFechaProg !== null && tsFechaProg > finDeSemanaActual();
-
-            if (esFuturaFueraDeEstaSemana) {
-                gestionHTML = `
-                    <div style="display:flex; flex-direction:column; gap:5px;">
-                        <div style="display:flex; flex-direction:column; gap:2px;">
-                            <span class="celda-estado ${estadoClase}">GUARDADO</span>
-                            <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
-                        </div>
-                        <button class="boton" onclick="enviarAMaquina(${globalIdx})" style="padding: 5px 10px; font-size: 11px; background-color: #1565c0; color: white;">Enviar a Máquina</button>
-                    </div>
-                `;
-            } else {
-                gestionHTML = `
-                    <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span class="celda-estado ${estadoClase}">GUARDADO</span>
-                        <small style="color: #2d8a3e; font-size: 10px; font-weight: bold;">📍 ${reg.ubicacion_db || 'Sin ubic.'}</small>
-                    </div>
-                `;
-            }
-        }
-        else if (estadoLabel === 'REPETIR') {
-            estadoClase = 'estado--cancelado';
-            gestionHTML = `
-                <div style="display:flex; flex-direction:column; gap:5px;">
-                    <div style="display:flex; flex-direction:column; gap:2px;">
-                        <span class="celda-estado ${estadoClase}">PARA REPETIR</span>
-                        <small style="color: #d32f2f; font-size: 9px;">Ver ficha para motivo</small>
-                    </div>
-                    <button class="boton boton--primario" onclick="abrirDashboard(${globalIdx})" style="padding: 5px 10px; font-size: 11px;">Iniciar Producción</button>
-                </div>
-            `;
-        }
-
-        return `
-            <tr class="fila-hover-global">
-                <td><strong>${reg.of || '—'}</strong></td>
-                <td style="font-weight: bold; color: #2d8a3e;">${reg.ref_ext || '—'}</td>
-                <td>${reg.descripcion || '—'}</td>
-                <td>
-                    ${reg.cliente || '—'}
-                    ${reg.responsable_db ? `<br><small style="color: #666;">👤 ${reg.responsable_db}</small>` : ''}
-                </td>
-                <td><span class="celda-estado estado--en-revision" style="background-color: #f1f8e9; color: #2e7d32; border: 1px solid #c8e6c9; font-weight: bold;">${reg.proceso || '—'}</span></td>
-                <td>${gestionHTML}</td>
-                <td>${reg.maquina || '—'}</td>
-                <td>${reg.fecha_programada || '—'}</td>
-            </tr>
-        `;
-    }).join('');
-    actualizarInfoPie();
-}
-
-function enviarAMaquina(index) {
-    const reg = registrosFiltrados[index];
-    let mensaje;
-    if (reg.estado_db === 'COMPLETADO') {
-        mensaje = `¿Confirmar que el grabado ya guardado de la OF ${reg.of} vuelve a producción?`;
-    } else {
-        mensaje = `¿Confirmar que la OF ${reg.of} ya está en máquina?`;
-    }
-    if (!confirm(mensaje)) return;
-
-    fetch('/grabados/api/registrar/', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'X-CSRFToken': getCookie('csrftoken')
-        },
-        body: JSON.stringify({
-            of: reg.of,
-            proceso: reg.proceso,
-            tipo_registro: 'ENVIAR_MAQUINA',
-            maquina: reg.maquina || ''
-        })
-    })
-    .then(response => response.json())
-    .then(res => {
-        if (res.status === 'ok') {
-            reg.estado_db = 'EN_MAQUINA';
-            renderizarTabla();
-        } else { alert("Error: " + res.message); }
-    })
-    .catch(err => alert("Error de conexión."));
-}
-
-function abrirDashboard(index) {
-    const reg = registrosFiltrados[index];
-    if (!reg) return;
-    
-    registroActivoIndex = index;
-    modoReporteDano = false;
-
-    document.getElementById('span-of').innerText = reg.of;
-    document.getElementById('span-cliente').innerText = reg.cliente;
-    
-    const esListoRecoger = (reg.estado_db === 'LISTO_PARA_RECOGER');
-
-    const formEntrada = document.getElementById('form-registro-entrada');
-    const formProduccion = document.getElementById('form-registro-produccion');
-    const tituloModal = document.getElementById('modal-registro').querySelector('h3');
-    const btnGuardar = document.getElementById('btn-dashboard-guardar');
-    const btnDano = document.getElementById('btn-reportar-dano');
-    const seccionDano = document.getElementById('seccion-dano-fabricacion');
-
-    seccionDano.style.display = 'none';
-    btnGuardar.style.backgroundColor = '#2d8a3e';
-
-    if (esListoRecoger) {
-        tituloModal.innerText = "Finalizar y Guardar Grabado";
-        btnGuardar.innerText = "Guardar en Almacén";
-        btnDano.style.display = 'none';
-        formEntrada.style.display = 'none';
-        formProduccion.style.display = 'block';
-    } else {
-        tituloModal.innerText = "Iniciar Producción (Datos Técnicos)";
-        btnGuardar.innerText = "Crear Registro";
-        btnDano.style.display = 'block';
-        formEntrada.style.display = 'block';
-        formProduccion.style.display = 'none';
-        
-        document.getElementById('reg-responsable').value = reg.responsable || '';
-        const horasProcesoEst = parseFloat(reg.horas_proceso);
-        document.getElementById('prod-tiempo').value = isNaN(horasProcesoEst) ? '' : Math.round(horasProcesoEst * 60);
-        actualizarBanoAcumulado();
-    }
-    document.getElementById('modal-registro').style.display = 'flex';
-}
-
-function actualizarBanoAcumulado() {
-    const caja = document.getElementById('prod-bano-acumulado-caja');
-    const msg = document.getElementById('prod-bano-acumulado-msg');
-    if (!caja || !msg) return;
-    fetch('/grabados/api/bano/')
-        .then(r => r.json())
-        .then(eb => {
-            msg.innerText = `${eb.ml_acumulados.toFixed(0)} / ${eb.limite} ml`;
-            if (eb.alerta) {
-                caja.style.background = '#fdecea';
-                caja.style.borderColor = '#f5c6c6';
-                caja.style.color = '#c0392b';
-            } else {
-                caja.style.background = '#e3f2fd';
-                caja.style.borderColor = '#bbdefb';
-                caja.style.color = '#1565c0';
-            }
-        })
-        .catch(() => { msg.innerText = '— / 2000 ml'; });
-}
-
-function activarReporteDano() {
-    modoReporteDano = true;
-    document.getElementById('seccion-dano-fabricacion').style.display = 'block';
-    const btnGuardar = document.getElementById('btn-dashboard-guardar');
-    btnGuardar.innerText = "Guardar Reporte de Daño";
-    btnGuardar.style.backgroundColor = '#d32f2f';
-    document.getElementById('btn-reportar-dano').style.display = 'none';
-    document.getElementById('reg-comentario-dano').focus();
-}
-
-function guardarDatosDashboard() {
-    if (registroActivoIndex === null) return;
-    const reg = registrosFiltrados[registroActivoIndex];
-    const btnGuardar = document.getElementById('btn-dashboard-guardar');
-    const esListoRecoger = (reg.estado_db === 'LISTO_PARA_RECOGER');
-
-    // Usar FormData para poder enviar archivos (fotos)
-    let formData = new FormData();
-    formData.append('of', reg.of);
-    formData.append('proceso', reg.proceso);
-    formData.append('cliente', reg.cliente);
-    formData.append('descripcion', reg.descripcion);
-    formData.append('referencia', reg.ref_ext);
-    formData.append('fecha_programada', reg.fecha_programada);
-    formData.append('maquina', reg.maquina || '');
-
-    if (esListoRecoger) {
-        const ubicacion = document.getElementById('reg-ubicacion-grabado').value.trim();
-        const estadoFisico = document.getElementById('reg-estado-fisico').value;
-        const comentario = document.getElementById('reg-comentario').value.trim();
-
-        if (!ubicacion) { alert("Ingrese ubicación física."); return; }
-        
-        if (estadoFisico === 'REPETIR' && comentario.length < 5) {
-            alert("Para repetir el grabado, debe ingresar un comentario detallado del motivo.");
-            return;
-        }
-
-        formData.append('tipo_registro', 'ALMACEN_RECOGER');
-        formData.append('estado_fisico', estadoFisico);
-        formData.append('ubicacion', ubicacion);
-        formData.append('sobre', document.getElementById('reg-ubicacion-sobre').value);
-        formData.append('comentario', comentario);
-    } else {
-        const responsable = document.getElementById('reg-responsable').value.trim();
-        if (!responsable) { alert("Ingrese responsable."); return; }
-        
-        if (modoReporteDano) {
-            const motivo = document.getElementById('reg-comentario-dano').value.trim();
-            if (!motivo) { alert("Explique el motivo del daño."); return; }
-            formData.append('tipo_registro', 'REPORTE_DANO');
-            formData.append('comentario', motivo);
-            
-            // Adjuntar foto si existe
-            const inputFoto = document.getElementById('reg-foto-dano');
-            if (inputFoto && inputFoto.files[0]) {
-                formData.append('foto_dano', inputFoto.files[0]);
-            }
-        } else {
-            formData.append('tipo_registro', 'CREAR_FABRICACION');
-        }
-
-        const cajaMotivo = document.getElementById('compensacion-motivo-caja');
-        const motivoComp = document.getElementById('prod-compensacion-motivo').value.trim();
-        if (cajaMotivo.style.display !== 'none' && !motivoComp) {
-            alert("Cambiaste la compensación del valor recomendado: explicá el motivo antes de guardar.");
-            return;
-        }
-
-        formData.append('responsable', responsable);
-        formData.append('tiempo', document.getElementById('prod-tiempo').value);
-        formData.append('peso_i', document.getElementById('prod-peso-i').value);
-        formData.append('peso_f', document.getElementById('prod-peso-f').value);
-        formData.append('temp', document.getElementById('prod-temp').value);
-        formData.append('rpm', document.getElementById('prod-rpm').value);
-        formData.append('compensacion', document.getElementById('prod-compensacion').value);
-        formData.append('compensacion_motivo', motivoComp);
-    }
-
-    btnGuardar.disabled = true;
-    fetch('/grabados/api/registrar/', {
-        method: 'POST',
-        // Nota: Al usar FormData no se pone el header Content-Type (el navegador lo hace solo con el boundary)
-        headers: { 'X-CSRFToken': getCookie('csrftoken') },
-        body: formData
-    })
-    .then(response => response.json())
-    .then(res => {
-        if (res.status === 'ok') {
-            if (res.bano) {
-                const aviso = res.bano.alerta
-                    ? `⚠️ Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml. ¡Hay que preparar un baño nuevo! (confirmalo en la Tabla de Consultas)`
-                    : `Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml de compensación acumulados.`;
-                alert(`${res.message}\n\n${aviso}`);
-            } else {
-                alert(res.message);
-            }
-            // Actualizar estado localmente
-            if (formData.get('tipo_registro') === 'CREAR_FABRICACION') reg.estado_db = 'EN_PROCESO';
-            else if (formData.get('tipo_registro') === 'ALMACEN_RECOGER') {
-                reg.estado_db = (formData.get('estado_fisico') === 'REPETIR') ? 'REPETIR' : 'COMPLETADO';
-                reg.ubicacion_db = formData.get('ubicacion');
-            }
-            reg.responsable_db = formData.get('responsable') || reg.responsable_db;
-            
-            renderizarTabla();
-            cerrarDashboard();
-        } else { alert("Error: " + res.message); }
-    })
-    .catch(err => alert("Error de conexión al guardar."))
-    .finally(() => { btnGuardar.disabled = false; });
-}
-
-function calcularPerdida() {
-    const pi = parseFloat(document.getElementById('prod-peso-i').value) || 0; // g
-    const pf = parseFloat(document.getElementById('prod-peso-f').value) || 0; // g
-    const perdida = Math.max(0, pi - pf); // gramos
-
-    // Actualizar mensaje de pérdida en gramos
-    const msgPerdida = document.getElementById('prod-perdida-msg');
-    if (msgPerdida) msgPerdida.innerText = perdida.toFixed(0) + ' g';
-
-    // Compensación (Baño): fórmula histórica Pérdida(kg) × 6.6 ml, mantenida igual
-    // pero ahora la pérdida se calcula en gramos, así que se divide /1000.
-    const mlBano = (perdida / 1000) * 6.6;
-    const msgBano = document.getElementById('prod-bano-msg');
-    if (msgBano) msgBano.innerText = mlBano.toFixed(0) + ' ml';
-
-    // Rellenar automáticamente el campo de compensación como sugerencia
-    compensacionRecomendada = Math.round(mlBano);
-    const inputComp = document.getElementById('prod-compensacion');
-    if (inputComp) {
-        inputComp.value = mlBano > 0 ? compensacionRecomendada : '';
-    }
-    verificarCambioCompensacion();
-}
-
-function verificarCambioCompensacion() {
-    const inputComp = document.getElementById('prod-compensacion');
-    const caja = document.getElementById('compensacion-motivo-caja');
-    const motivo = document.getElementById('prod-compensacion-motivo');
-    if (!inputComp || !caja) return;
-
-    const valorActual = parseInt(inputComp.value, 10) || 0;
-    const cambiado = valorActual !== compensacionRecomendada;
-
-    caja.style.display = cambiado ? 'block' : 'none';
-    if (!cambiado && motivo) motivo.value = '';
-}
-
-function cerrarDashboard() {
-    const modal = document.getElementById('modal-registro');
-    if (modal) modal.style.display = 'none';
-}
-
-function actualizarInfoPie() {
-    const info = document.getElementById('pie-info');
-    if (info) info.innerHTML = `Vista Previa (Total: ${registrosFiltrados.length} registros en Excel)`;
-}
-
-const buscador = document.getElementById('buscador-input');
-if (buscador) {
-    buscador.addEventListener('input', function(e) {
-        const b = e.target.value.toLowerCase();
-        registrosFiltrados = DATOS_PLANI.filter(r => 
-            String(r.of).toLowerCase().includes(b) || 
-            String(r.cliente).toLowerCase().includes(b)
-        );
-        paginaActual = 1;
         renderizarTabla();
-    });
-}
+    }
 
-// Inicialización
-renderizarTabla();
+    // -------------------------------------------------------------- exportar
+    function exportar() {
+        if (!window.XLSX || !filtrados.length) return;
+        const filas = filtrados.map(f => {
+            const e = f.grabado || {};
+            return {
+                'OF': f.of, 'OF Ref.': sinDato(f.ref_ext) ? '' : f.ref_ext, 'Descripción': f.descripcion || '',
+                'Cliente': f.cliente || '', 'Proceso': f.proceso, 'Máquina': f.maquina || '',
+                'Fecha prog.': f.fecha_programada || '', 'Grabado': e.grabado ? e.grabado.of_origen : '',
+                'Estado del grabado': e.grabado ? e.grabado.estado_display : '', 'Situación': e.mensaje || '',
+            };
+        });
+        const libro = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(filas), 'Planning');
+        XLSX.writeFile(libro, `planning_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    }
+
+    // ------------------------------------------------------- mandar a máquina
+    function abrirMandar(fila, otraVez) {
+        filaActiva = fila;
+        const e = fila.grabado;
+        grabadoElegido = { id: e.grabado.id, of_origen: e.grabado.of_origen };
+
+        $('mandar-subtitulo').textContent = `OF ${fila.of} · ${fila.proceso}`;
+        const avisoOtraVez = $('mandar-aviso-otra-vez');
+        if (otraVez) {
+            avisoOtraVez.textContent = `Esta OF ya se completó el ${e.completada.fecha}. ¿Seguro que quieres mandarla otra vez a máquina?`;
+            avisoOtraVez.style.display = 'block';
+            $('mandar-btn-confirmar').textContent = 'Sí, mandar otra vez';
+        } else {
+            avisoOtraVez.style.display = 'none';
+            $('mandar-btn-confirmar').textContent = 'Mandar a máquina';
+        }
+        pintarGrabadoElegido(e.grabado.of_origen === String(fila.of) ? 'Grabado de esta misma OF.'
+            : `La OF usa el grabado de la OF ${e.grabado.of_origen}.`);
+
+        $('mandar-resumen').innerHTML = [
+            ['Máquina', fila.maquina], ['Fecha programada', fila.fecha_programada],
+            ['Cantidad de formatos', numero(fila.cantidad_formatos, 0)], ['Horas de proceso', numero(fila.horas_proceso, 1)],
+            ['Papel', fila.papel],
+        ].map(([t, v]) => `<div><dt>${escapar(t)}</dt><dd>${escapar(v)}</dd></div>`).join('');
+
+        $('mandar-otros').style.display = 'none';
+        $('mandar-otros-buscar').value = '';
+        $('mandar-otros-lista').innerHTML = '';
+        $('mandar-btn-otro').style.display = '';
+
+        // Aviso anticipado si la máquina del Excel no está en el catálogo (el servidor lo valida igual).
+        const maquina = normalizarMaquina(fila.maquina);
+        const btn = $('mandar-btn-confirmar');
+        if (!maquina) {
+            mostrarAviso('mandar-aviso', 'aviso--error', 'La fila del Excel no tiene máquina asignada: no se puede mandar a máquina.');
+            btn.disabled = true;
+        } else if (!MAQUINAS_ACTIVAS.has(maquina)) {
+            mostrarAviso('mandar-aviso', 'aviso--error',
+                `La máquina "${maquina}" no está en el catálogo; regístrala en el administrador (Gestión de grabados > Máquinas) y vuelve a intentarlo.`);
+            btn.disabled = true;
+        } else {
+            $('mandar-aviso').style.display = 'none';
+            btn.disabled = false;
+        }
+        abrirModal('modal-mandar');
+        $('mandar-btn-cancelar').focus();
+    }
+
+    function pintarGrabadoElegido(nota) {
+        $('mandar-grabado-texto').textContent = `Grabado ${grabadoElegido.of_origen} · ${filaActiva.proceso}`;
+        $('mandar-grabado-nota').textContent = nota || '';
+    }
+
+    function buscarOtrosGrabados() {
+        const pedido = ++pedidoOtros;
+        const params = new URLSearchParams({ estado: 'APROBADO', proceso: filaActiva.proceso });
+        const q = $('mandar-otros-buscar').value.trim();
+        if (q) params.set('q', q);
+        const lista = $('mandar-otros-lista');
+        lista.innerHTML = '<li class="plani-nota">Buscando...</li>';
+        fetch(`/grabados/api/inventario/?${params}`)
+            .then(r => r.json())
+            .then(res => {
+                if (pedido !== pedidoOtros) return;
+                if (res.status !== 'ok') { lista.innerHTML = `<li class="plani-nota">${escapar(res.message)}</li>`; return; }
+                const grabados = res.data.slice(0, 50);
+                if (!grabados.length) { lista.innerHTML = '<li class="plani-nota">No hay grabados aprobados que coincidan.</li>'; return; }
+                lista.innerHTML = grabados.map(g => `
+                    <li>
+                        <input type="radio" name="mandar-otro" id="mandar-otro-${g.id}" value="${g.id}"
+                               data-of="${escapar(g.of_origen)}" ${g.id === grabadoElegido.id ? 'checked' : ''}>
+                        <label for="mandar-otro-${g.id}"><strong>${escapar(g.of_origen)}</strong> · ${escapar(g.cliente)}<br>
+                            <span class="plani-nota">${escapar(g.referencia)}${g.ubicacion ? ' · 📍 ' + escapar(g.ubicacion) : ''}</span></label>
+                    </li>`).join('');
+            })
+            .catch(() => { if (pedido === pedidoOtros) lista.innerHTML = '<li class="plani-nota">Error de conexión.</li>'; });
+    }
+
+    function confirmarMandar() {
+        if (!filaActiva) return;
+        const fila = filaActiva;
+        const btn = $('mandar-btn-confirmar');
+        btn.disabled = true;
+        postJson('/grabados/api/plani/mandar-maquina/', {
+            of: fila.of,
+            proceso: fila.proceso,
+            grabado_id: grabadoElegido.id,
+            fila: {
+                maquina: fila.maquina, fecha_programada: fila.fecha_programada,
+                cantidad_formatos: fila.cantidad_formatos, horas_proceso: fila.horas_proceso, papel: fila.papel,
+            },
+        })
+            .then(res => {
+                if (res.status !== 'ok') { mostrarAviso('mandar-aviso', 'aviso--error', res.message); return; }
+                cerrarModal('modal-mandar');
+                alert(res.message);
+                sincronizar(true);
+            })
+            .catch(() => mostrarAviso('mandar-aviso', 'aviso--error', 'Error de conexión al mandar a máquina.'))
+            .finally(() => { btn.disabled = false; });
+    }
+
+    // ---------------------------------------------------------------- recoger
+    function abrirRecoger(fila) {
+        filaActiva = fila;
+        const e = fila.grabado;
+        $('recoger-subtitulo').textContent =
+            `OF ${fila.of} · grabado ${e.grabado.of_origen} · ${e.envio.maquina}`;
+        $('recoger-aviso-terminada').style.display = e.terminada_en_planta ? 'block' : 'none';
+        $('recoger-form').reset();
+        $('recoger-ubicacion').value = e.grabado.ubicacion || '';
+        $('recoger-aviso').style.display = 'none';
+        actualizarComentarioObligatorio();
+        abrirModal('modal-recoger');
+        $('recoger-ubicacion').focus();
+    }
+
+    function estadoFisico() {
+        const marcado = document.querySelector('input[name="estado_fisico"]:checked');
+        return marcado ? marcado.value : '';
+    }
+
+    function actualizarComentarioObligatorio() {
+        const repetir = estadoFisico() === 'REPETIR';
+        $('recoger-comentario-label').innerHTML = repetir
+            ? `Motivo para repetir (obligatorio, al menos ${LARGO_MINIMO_COMENTARIO} caracteres): <span class="obligatorio">*</span>`
+            : 'Comentario (opcional):';
+    }
+
+    function confirmarRecoger() {
+        if (!filaActiva) return;
+        const fila = filaActiva;
+        const ubicacion = $('recoger-ubicacion').value.trim();
+        const comentario = $('recoger-comentario').value.trim();
+        if (!ubicacion) { mostrarAviso('recoger-aviso', 'aviso--error', 'Ingresa la ubicación física donde queda el grabado.'); return; }
+        if (estadoFisico() === 'REPETIR' && comentario.length < LARGO_MINIMO_COMENTARIO) {
+            mostrarAviso('recoger-aviso', 'aviso--error',
+                `Para mandar el grabado a REPETIR explica el motivo (al menos ${LARGO_MINIMO_COMENTARIO} caracteres).`);
+            return;
+        }
+
+        const datos = new FormData();   // form-urlencoded; ya no hay archivos
+        datos.append('envio_id', fila.grabado.envio.id);
+        datos.append('of', fila.of);
+        datos.append('estado_fisico', estadoFisico());
+        datos.append('ubicacion', ubicacion);
+        datos.append('comentario', comentario);
+
+        const btn = $('recoger-btn-confirmar');
+        btn.disabled = true;
+        fetch('/grabados/api/plani/recoger/', {
+            method: 'POST', headers: { 'X-CSRFToken': getCookie('csrftoken') }, body: datos,
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'ok') { mostrarAviso('recoger-aviso', 'aviso--error', res.message); return; }
+                cerrarModal('modal-recoger');
+                alert(res.message);
+                sincronizar(true);
+            })
+            .catch(() => mostrarAviso('recoger-aviso', 'aviso--error', 'Error de conexión al guardar la recogida.'))
+            .finally(() => { btn.disabled = false; });
+    }
+
+    // --------------------------------------------------------------- eventos
+    $('btn-sincronizar').addEventListener('click', () => sincronizar(false));
+    $('btn-exportar').addEventListener('click', exportar);
+    $('buscador-input').addEventListener('input', debounce(aplicarBusqueda, 200));
+
+    $('tabla-cuerpo').addEventListener('click', (ev) => {
+        const boton = ev.target.closest('[data-accion]');
+        const filaHtml = ev.target.closest('tr[data-indice]');
+        if (!boton || !filaHtml) return;
+        const fila = datosPlani[Number(filaHtml.dataset.indice)];
+        const e = fila.grabado || {};
+        switch (boton.dataset.accion) {
+            case 'ver': window.PanelGrabado.abrir(e.grabado.id); break;
+            case 'alta':
+            case 'refabricar':
+                window.location.href = `/grabados/alta/?${new URLSearchParams(e.alta)}`;
+                break;
+            case 'mandar': abrirMandar(fila, false); break;
+            case 'mandar-otra-vez': abrirMandar(fila, true); break;
+            case 'recoger': abrirRecoger(fila); break;
+        }
+    });
+
+    $('mandar-btn-cancelar').addEventListener('click', () => cerrarModal('modal-mandar'));
+    $('mandar-btn-confirmar').addEventListener('click', confirmarMandar);
+    $('mandar-btn-otro').addEventListener('click', () => {
+        $('mandar-otros').style.display = 'block';
+        $('mandar-btn-otro').style.display = 'none';
+        buscarOtrosGrabados();
+        $('mandar-otros-buscar').focus();
+    });
+    $('mandar-otros-buscar').addEventListener('input', debounce(buscarOtrosGrabados, 300));
+    $('mandar-otros-lista').addEventListener('change', (ev) => {
+        if (ev.target.name !== 'mandar-otro') return;
+        grabadoElegido = { id: Number(ev.target.value), of_origen: ev.target.dataset.of };
+        pintarGrabadoElegido(grabadoElegido.of_origen === String(filaActiva.of)
+            ? 'Grabado de esta misma OF.' : 'Elegiste otro grabado aprobado del mismo proceso.');
+    });
+
+    $('recoger-btn-cancelar').addEventListener('click', () => cerrarModal('modal-recoger'));
+    $('recoger-btn-confirmar').addEventListener('click', confirmarRecoger);
+    document.querySelectorAll('input[name="estado_fisico"]').forEach(r =>
+        r.addEventListener('change', actualizarComentarioObligatorio));
+
+    document.addEventListener('keydown', (ev) => {
+        if (ev.key !== 'Escape') return;
+        if ($('modal-mandar').style.display === 'flex') cerrarModal('modal-mandar');
+        else if ($('modal-recoger').style.display === 'flex') cerrarModal('modal-recoger');
+    });
+
+    renderizarTabla();
+})();

@@ -465,7 +465,7 @@ class EnvioMaquina(models.Model):
     maquina = models.ForeignKey(Maquina, on_delete=models.PROTECT, related_name='envios',
                                 verbose_name="Máquina")
 
-    # Foto de la fila del Excel al momento del envío.
+    # Copia de los datos de la fila del Excel al momento del envío.
     fecha_programada = models.DateField(null=True, blank=True, verbose_name="Fecha Prog.")
     cantidad_formatos = models.IntegerField(null=True, blank=True, verbose_name="Cantidad Formatos")
     horas_proceso = models.FloatField(null=True, blank=True, verbose_name="Horas Proceso")
@@ -485,8 +485,6 @@ class EnvioMaquina(models.Model):
     estado_fisico = models.CharField(max_length=10, choices=ESTADO_FISICO_CHOICES,
                                      blank=True, null=True, verbose_name="Estado físico")
     comentario = models.TextField(blank=True, null=True, verbose_name="Comentario")
-    foto_dano = models.ImageField(upload_to='grabados/danos/%Y/%m/', null=True, blank=True,
-                                  verbose_name="Foto de Daño")
     ubicacion = models.CharField(max_length=200, blank=True, null=True,
                                  verbose_name="Ubicación al recoger")
 

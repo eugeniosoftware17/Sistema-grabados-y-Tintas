@@ -8,6 +8,7 @@
     'use strict';
 
     let busqueda = null;               // última respuesta de api_alta_buscar
+    let procesoInicial = null;         // ?proceso= de la URL (desde el PLANI), solo en la primera búsqueda
     let compensacionRecomendada = 0;
 
     const $ = (id) => document.getElementById(id);
@@ -80,7 +81,8 @@
 
                 const selProceso = $('alta-proceso');
                 selProceso.disabled = false;
-                selProceso.value = res.externo.proceso || '';
+                selProceso.value = procesoInicial || res.externo.proceso || '';
+                procesoInicial = null;
                 if (selProceso.value) {
                     mostrarAccion();
                 } else {
@@ -294,4 +296,14 @@
     $('alta-peso-i').addEventListener('input', calcularPerdida);
     $('alta-peso-f').addEventListener('input', calcularPerdida);
     $('alta-compensacion').addEventListener('input', verificarCambioCompensacion);
+
+    // Desde el PLANI ("Dar de alta" / "Refabricar"): /grabados/alta/?of=23304&proceso=STAMPING
+    const parametros = new URLSearchParams(window.location.search);
+    const ofInicial = (parametros.get('of') || '').trim();
+    if (ofInicial) {
+        const proceso = (parametros.get('proceso') || '').toUpperCase();
+        procesoInicial = ['STAMPING', 'EMBOSSING'].includes(proceso) ? proceso : null;
+        $('alta-of').value = ofInicial;
+        buscarOF();
+    }
 })();
