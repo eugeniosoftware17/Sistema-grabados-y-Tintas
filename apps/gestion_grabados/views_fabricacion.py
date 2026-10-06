@@ -1,8 +1,8 @@
 """
 RETIRADA (fase 3): la pantalla Fabricación (alta manual de grabados de stock en
-OrdenFabricacion) la reemplaza Alta de Grabado (views_grabados.py).
+OrdenFabricacion) la reemplaza Crear Grabado (views_grabados.py).
 
-- La página redirige a Alta de Grabado y ya no aparece en el menú.
+- La página redirige a Crear Grabado y ya no aparece en el menú.
 - Los endpoints que escribían (registrar, registrar-lote, editar-ubicación)
   responden 410 sin tocar la base.
 - Los de solo lectura se mantienen mientras exista el módulo.
@@ -20,7 +20,7 @@ from .views import buscar_datos_externos
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
 
 MENSAJE_RETIRADA = ('La pantalla Fabricación se retiró y ya no registra grabados: '
-                    'usa Alta de Grabado.')
+                    'usa Crear Grabado.')
 
 
 def _retirada():

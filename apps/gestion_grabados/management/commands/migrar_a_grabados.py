@@ -393,7 +393,7 @@ class Command(BaseCommand):
             self.grabados_reutilizados += 1
             if grabado.estado != estado:
                 self.conflictos.append(
-                    f'{of_origen} {proceso}: el grabado de Alta está en {grabado.estado} y las filas '
+                    f'{of_origen} {proceso}: el grabado creado en EIS está en {grabado.estado} y las filas '
                     f'legadas dicen {estado} (fila id={vigente["id"]} {vigente["estado"]}); se deja '
                     f'{grabado.estado}.')
             numero = grabado.fabricaciones.aggregate(n=Max('numero'))['n'] or 0
@@ -405,7 +405,7 @@ class Command(BaseCommand):
             self.grabados_nuevos += 1
             self.estados_nuevos[estado] += 1
             grabado = Grabado.objects.create(
-                of_origen=of_origen, proceso=proceso, estado=estado, aprobado_legado=True,
+                of_origen=of_origen, proceso=proceso, estado=estado, tipo='LEGADO',
                 ubicacion=self.ultimo_valor(migrables, 'ubicacion', 200),
                 usos_acumulados=usos, creado_por_id=migrables[0]['usuario_id'],
                 **self.datos_grabado(clave, migrables),
@@ -536,7 +536,7 @@ class Command(BaseCommand):
         self.r.lista(self.repeticiones)
 
     def seccion_conflictos(self):
-        self.r.titulo('7. CONFLICTOS CON GRABADOS CREADOS DESDE ALTA (y envíos que no quedan abiertos)')
+        self.r.titulo('7. CONFLICTOS CON GRABADOS CREADOS DESDE CREAR GRABADO (y envíos que no quedan abiertos)')
         self.r.conteo('Grabados que ya existían y se reutilizan', self.grabados_reutilizados)
         self.r.conteo('Conflictos', len(self.conflictos), alerta=True)
         self.r.lista(self.conflictos)
@@ -552,7 +552,7 @@ class Command(BaseCommand):
         self.r.linea('\n  Grabados que crea la migración, por estado:')
         for estado, n in sorted(getattr(self, 'estados_nuevos', Counter()).items()):
             self.r.conteo(f'  {estado}', n)
-        self.r.linea('\n  Grabados que ya estaban en la base (Alta / pruebas), por estado:')
+        self.r.linea('\n  Grabados que ya estaban en la base (Crear Grabado / pruebas), por estado:')
         for estado, n in sorted(getattr(self, 'estados_previos', Counter()).items()):
             self.r.conteo(f'  {estado}', n)
 

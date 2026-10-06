@@ -298,6 +298,11 @@ class Grabado(models.Model):
         ('EN_MAQUINA', 'En Máquina'),
         ('REPETIR', 'Para Repetir'),
     ]
+    TIPO_CHOICES = [
+        ('K1', 'K1 – de prueba'),
+        ('DIRECTO', 'Producción – directo'),
+        ('LEGADO', 'Legado (migrado)'),
+    ]
 
     of_origen = models.CharField(
         max_length=20,
@@ -327,10 +332,13 @@ class Grabado(models.Model):
         default='EN_FABRICACION',
         verbose_name="Estado"
     )
-    aprobado_legado = models.BooleanField(
-        default=False,
-        verbose_name="Aprobado sin K1 (legado)",
-        help_text="Migrado desde OrdenFabricacion; nunca pasó K1 en EIS."
+    tipo = models.CharField(
+        max_length=10,
+        choices=TIPO_CHOICES,
+        default='K1',
+        verbose_name="Tipo",
+        help_text="Cómo se creó: K1 (prueba, requiere aprobación), Producción directa "
+                  "(aprobado al guardar, sin K1) o Legado (migrado desde OrdenFabricacion)."
     )
     ubicacion = models.CharField(max_length=200, blank=True, null=True, verbose_name="Ubicación física")
     usos_acumulados = models.PositiveIntegerField(default=0, verbose_name="Usos acumulados")

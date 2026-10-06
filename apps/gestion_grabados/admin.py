@@ -81,8 +81,8 @@ class EnvioMaquinaInline(admin.TabularInline):
 @admin.register(Grabado)
 class GrabadoAdmin(admin.ModelAdmin):
     list_display = ('of_origen', 'proceso', 'cliente', 'estado', 'ubicacion',
-                    'usos_acumulados', 'aprobado_legado', 'actualizado_el')
-    list_filter = ('proceso', 'estado', 'aprobado_legado', 'datos_manuales')
+                    'usos_acumulados', 'tipo', 'actualizado_el')
+    list_filter = ('proceso', 'estado', 'tipo', 'datos_manuales')
     search_fields = ('of_origen', 'cliente', 'referencia', 'sobre')
     readonly_fields = ('creado_por', 'creado_el', 'actualizado_el')
     inlines = [FabricacionGrabadoInline, PruebaK1Inline, EnvioMaquinaInline]

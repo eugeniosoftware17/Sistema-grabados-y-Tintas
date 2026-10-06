@@ -21,9 +21,9 @@ from ..models import (
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
 
-# Qué se puede hacer desde la pantalla de alta según el estado del grabado.
-ACCION_ALTA = 'ALTA'                # no existe: Grabado + fabricación INICIAL + K1 intento 1
-ACCION_RECHAZO_K1 = 'RECHAZO_K1'    # EN_FABRICACION: nueva fabricación + K1 intento n+1
+# Qué se puede hacer desde la pantalla Crear Grabado según el estado del grabado.
+ACCION_ALTA = 'ALTA'                # no existe: Grabado + fabricación INICIAL (+ K1 intento 1 si es K1)
+ACCION_RECHAZO_K1 = 'RECHAZO_K1'    # EN_FABRICACION (solo tipo K1): nueva fabricación + K1 intento n+1
 ACCION_REPETICION = 'REPETICION'    # REPETIR: nueva fabricación, sin K1, vuelve a APROBADO
 ACCION_BLOQUEADA = 'BLOQUEADA'
 
@@ -32,6 +32,11 @@ BLOQUEO_ESTADO = 'ESTADO'
 BLOQUEO_HISTORIAL_LEGADO = 'HISTORIAL_LEGADO'
 BLOQUEO_NO_ES_ORIGEN = 'NO_ES_ORIGEN'
 BLOQUEO_SIN_PROCESO = 'SIN_PROCESO'
+
+# Tipos que se pueden elegir al crear un grabado (LEGADO solo lo pone migrar_a_grabados).
+TIPO_K1 = 'K1'
+TIPO_DIRECTO = 'DIRECTO'
+TIPOS_CREABLES = (TIPO_K1, TIPO_DIRECTO)
 
 LARGO_MINIMO_MOTIVO_RECHAZO = 5
 PERMISO_DECIDIR_K1 = 'gestion_grabados.decidir_pruebak1'
@@ -171,6 +176,8 @@ def _resumen_grabado(grabado):
     return {
         'estado': grabado.estado,
         'estado_display': grabado.get_estado_display(),
+        'tipo': grabado.tipo,
+        'tipo_display': grabado.get_tipo_display(),
         'cliente': grabado.cliente,
         'referencia': grabado.referencia,
         'sobre': grabado.sobre or '',
@@ -191,7 +198,9 @@ def evaluar_alta(of_origen, proceso, info_externa, normalizar_of, grabado=None, 
     resultado = {'accion': ACCION_BLOQUEADA, 'grabado': _resumen_grabado(grabado)}
 
     if grabado is not None:
-        if grabado.estado == 'EN_FABRICACION':
+        # Un K1 rechazado solo existe en grabados K1; si otro tipo quedara en
+        # EN_FABRICACION (dato corrupto) se bloquea en vez de abrirle un K1.
+        if grabado.estado == 'EN_FABRICACION' and grabado.tipo == TIPO_K1:
             resultado['accion'] = ACCION_RECHAZO_K1
         elif grabado.estado == 'REPETIR':
             resultado['accion'] = ACCION_REPETICION
@@ -299,10 +308,13 @@ def _datos_grabado_nuevo(info_externa, datos_manuales):
 
 
 def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
-                          datos_tecnicos, maquina_id, datos_manuales, usuario):
-    """Registra una fabricación desde la pantalla de alta. El caso (alta nueva,
-    refabricación por K1 rechazado o por REPETIR) lo decide el estado real del
-    grabado, no lo que mande el navegador.
+                          datos_tecnicos, maquina_id, datos_manuales, usuario, tipo=None):
+    """Registra una fabricación desde la pantalla Crear Grabado. El caso (alta
+    nueva, refabricación por K1 rechazado o por REPETIR) lo decide el estado real
+    del grabado, no lo que mande el navegador.
+    `tipo` (K1 / DIRECTO) solo cuenta en el alta nueva y es obligatorio ahí: un
+    DIRECTO queda APROBADO sin K1 y sin máquina. En las refabricaciones se usa el
+    tipo que ya tiene el grabado.
     Devuelve {'accion', 'grabado', 'fabricacion', 'prueba_k1', 'bano'}."""
     if proceso not in PROCESOS_VALIDOS:
         raise ErrorGrabado('Proceso inválido.')
@@ -318,28 +330,31 @@ def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
             if accion == ACCION_BLOQUEADA:
                 raise TransicionInvalida(evaluacion['mensaje'])
 
-            maquina = _maquina_activa(maquina_id) if accion != ACCION_REPETICION else None
+            if accion == ACCION_ALTA and tipo not in TIPOS_CREABLES:
+                raise ErrorGrabado('Selecciona el tipo de grabado (K1 o Producción).')
+            con_k1 = accion == ACCION_RECHAZO_K1 or (accion == ACCION_ALTA and tipo == TIPO_K1)
+            maquina = _maquina_activa(maquina_id) if con_k1 else None
 
             if accion == ACCION_ALTA:
                 grabado = Grabado.objects.create(
-                    of_origen=of_origen, proceso=proceso, creado_por=usuario,
-                    estado='PENDIENTE_K1',
+                    of_origen=of_origen, proceso=proceso, creado_por=usuario, tipo=tipo,
+                    estado='PENDIENTE_K1' if con_k1 else 'APROBADO',
                     **_datos_grabado_nuevo(info_externa, datos_manuales),
                 )
-                tipo, numero = 'INICIAL', 1
+                tipo_fabricacion, numero = 'INICIAL', 1
             else:
                 ultimo = grabado.fabricaciones.aggregate(n=Max('numero'))['n'] or 0
-                tipo = 'RECHAZO_K1' if accion == ACCION_RECHAZO_K1 else 'REPETICION'
+                tipo_fabricacion = 'RECHAZO_K1' if accion == ACCION_RECHAZO_K1 else 'REPETICION'
                 numero = ultimo + 1
                 grabado.estado = 'PENDIENTE_K1' if accion == ACCION_RECHAZO_K1 else 'APROBADO'
                 grabado.save(update_fields=['estado', 'actualizado_el'])
 
             fabricacion = FabricacionGrabado.objects.create(
-                grabado=grabado, numero=numero, tipo=tipo, registrado_por=usuario, **tecnicos,
+                grabado=grabado, numero=numero, tipo=tipo_fabricacion, registrado_por=usuario, **tecnicos,
             )
 
             prueba = None
-            if accion != ACCION_REPETICION:
+            if con_k1:
                 ultimo_intento = grabado.pruebas_k1.aggregate(n=Max('intento'))['n'] or 0
                 prueba = PruebaK1.objects.create(
                     grabado=grabado, fabricacion=fabricacion, intento=ultimo_intento + 1,

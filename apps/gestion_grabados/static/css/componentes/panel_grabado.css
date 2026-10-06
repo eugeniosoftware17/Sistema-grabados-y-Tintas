@@ -136,6 +136,14 @@ body.pg-bloqueo-scroll { overflow: hidden; }
 .pg-etiqueta--RECHAZADO      { background: #f8d7da; color: #842029; }
 .pg-etiqueta--neutra         { background: #eef2ef; color: #4a5a50; }
 
+/* Tipo de grabado (Grabado.tipo): con borde, para no confundirlas con el estado. */
+.pg-etiqueta--tipo-K1,
+.pg-etiqueta--tipo-DIRECTO,
+.pg-etiqueta--tipo-LEGADO    { background: #fff; padding: 2px 8px; border: 1px solid; }
+.pg-etiqueta--tipo-K1        { color: #6a3fb5; border-color: #c9b5ec; }
+.pg-etiqueta--tipo-DIRECTO   { color: #00695c; border-color: #9fd6cd; }
+.pg-etiqueta--tipo-LEGADO    { color: #5a6b60; border-color: #c8d2cb; }
+
 /* Listas de historial */
 .pg-lista { list-style: none; margin: 0; padding: 0; }
 .pg-item { padding: 10px 0; border-top: 1px solid #eef2ef; }

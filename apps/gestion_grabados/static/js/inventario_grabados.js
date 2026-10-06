@@ -7,7 +7,7 @@
 (function () {
     'use strict';
 
-    const filtros = { q: '', proceso: '', estado: '' };
+    const filtros = { q: '', proceso: '', tipo: '', estado: '' };
     let grabados = [];
     let pedidoActual = 0;              // descarta respuestas viejas al escribir rápido
 
@@ -32,7 +32,7 @@
     }
 
     function mensajeTabla(texto) {
-        cuerpo.innerHTML = `<tr><td colspan="10" class="tabla-sin-resultados">${escapar(texto)}</td></tr>`;
+        cuerpo.innerHTML = `<tr><td colspan="11" class="tabla-sin-resultados">${escapar(texto)}</td></tr>`;
     }
 
     // ---------------------------------------------------------------- render
@@ -58,14 +58,14 @@
         const aviso = $('inv-aviso-limite');
         if (res.total > res.data.length) {
             aviso.textContent = `Se muestran los ${res.data.length} grabados más recientes de ${res.total}. ` +
-                'Afina la búsqueda o filtra por estado o proceso para ver el resto.';
+                'Afina la búsqueda o filtra por estado, proceso o tipo para ver el resto.';
             aviso.style.display = 'block';
         } else {
             aviso.style.display = 'none';
         }
 
         if (!grabados.length) {
-            mensajeTabla(filtros.q || filtros.proceso || filtros.estado
+            mensajeTabla(filtros.q || filtros.proceso || filtros.tipo || filtros.estado
                 ? 'Ningún grabado coincide con los filtros.'
                 : 'Todavía no hay grabados registrados.');
             return;
@@ -78,11 +78,12 @@
                 <td data-label="Cliente">${escapar(g.cliente)}</td>
                 <td data-label="Referencia" class="inv-referencia">${escapar(g.referencia)}</td>
                 <td data-label="Estado">${etiqueta(g.estado, g.estado_display)}</td>
+                <td data-label="Tipo">${etiqueta('tipo-' + g.tipo, g.tipo_display)}</td>
                 <td data-label="Intentos K1" class="inv-centrado">${escapar(g.intentos_k1)}</td>
                 <td data-label="Último K1">${etiqueta(g.ultimo_k1, g.ultimo_k1_display)}</td>
                 <td data-label="Usos" class="inv-centrado">${escapar(g.usos_acumulados)}</td>
                 <td data-label="Ubicación">${escapar(g.ubicacion)}</td>
-                <td data-label="Fecha de alta">${escapar(g.creado_el)}</td>
+                <td data-label="Fecha de creación">${escapar(g.creado_el)}</td>
             </tr>`).join('');
     }
 
@@ -123,6 +124,7 @@
     }, 300));
 
     $('inv-proceso').addEventListener('change', (e) => { filtros.proceso = e.target.value; cargar(); });
+    $('inv-tipo').addEventListener('change', (e) => { filtros.tipo = e.target.value; cargar(); });
 
     cuerpo.addEventListener('click', (e) => {
         const fila = e.target.closest('.inv-fila');

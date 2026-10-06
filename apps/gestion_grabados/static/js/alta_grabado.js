@@ -1,7 +1,12 @@
 /* ============================================================
-   Alta de Grabado — ver views_grabados.py y services/grabados.py
-   El servidor decide el caso (alta nueva / refabricación por K1
+   Crear Grabado — ver views_grabados.py y services/grabados.py
+   Orden de la pantalla: 1) tipo de grabado, 2) OF y proceso, 3) datos
+   técnicos. El servidor decide el caso (alta nueva / refabricación por K1
    rechazado / refabricación por REPETIR); acá solo se muestra.
+   - Alta nueva: manda el tipo elegido. K1 queda Pendiente de K1 y pide
+     máquina; Producción directa queda Aprobado, sin K1 ni máquina.
+   - Si la OF ya tiene grabado, el selector de tipo se bloquea mostrando
+     el tipo que ya tiene (en la refabricación no se puede cambiar).
    ============================================================ */
 
 (function () {
@@ -10,8 +15,10 @@
     let busqueda = null;               // última respuesta de api_alta_buscar
     let procesoInicial = null;         // ?proceso= de la URL (desde el PLANI), solo en la primera búsqueda
     let compensacionRecomendada = 0;
+    let tipoUsuario = '';              // lo que eligió el usuario (se restaura al desbloquear el selector)
 
     const $ = (id) => document.getElementById(id);
+    const radiosTipo = [...document.querySelectorAll('input[name="alta-tipo"]')];
 
     function getCookie(name) {
         const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
@@ -27,23 +34,69 @@
 
     function ocultar(id) { $(id).style.display = 'none'; }
 
+    // Errores (de validación o del servidor) y confirmación del guardado, junto al botón Guardar.
+    function avisoGuardado(clase, texto) {
+        mostrarAviso('alta-aviso-guardado', clase, texto);
+        $('alta-aviso-guardado').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+
+    function evaluacionActual() {
+        const proceso = $('alta-proceso').value;
+        return busqueda && proceso ? busqueda.procesos[proceso] : null;
+    }
+
+    // ------------------------------------------------------ tipo de grabado
+    function tipoElegido() {
+        const marcado = radiosTipo.find(r => r.checked);
+        return marcado ? marcado.value : '';
+    }
+
+    function marcarTipo(valor) {
+        radiosTipo.forEach(r => { r.checked = r.value === valor; });
+    }
+
+    // Con grabado existente: selector bloqueado con su tipo y una nota. Sin
+    // grabado: selector libre con lo que había elegido el usuario.
+    function bloquearTipo(grabado) {
+        const nota = $('alta-tipo-nota');
+        if (grabado) {
+            marcarTipo(grabado.tipo);   // LEGADO no tiene opción: quedan las dos sin marcar
+            radiosTipo.forEach(r => { r.disabled = true; });
+            nota.textContent = `Esta OF ya tiene un grabado de tipo «${grabado.tipo_display}»: ` +
+                'se mantiene ese tipo y no se puede cambiar.';
+            nota.style.display = 'block';
+        } else {
+            radiosTipo.forEach(r => { r.disabled = false; });
+            marcarTipo(tipoUsuario);
+            nota.style.display = 'none';
+        }
+    }
+
+    // Máquina del K1: en la refabricación por K1 rechazado y en el alta nueva de tipo K1.
+    function necesitaMaquina(evaluacion) {
+        return evaluacion.accion === 'RECHAZO_K1' || (evaluacion.accion === 'ALTA' && tipoElegido() === 'K1');
+    }
+
+    // ------------------------------------------------------------ limpieza
     function limpiarTecnicos() {
         ['alta-responsables', 'alta-tiempo', 'alta-peso-i', 'alta-peso-f', 'alta-temp', 'alta-rpm',
          'alta-compensacion', 'alta-compensacion-motivo', 'alta-maquina']
             .forEach(id => { $(id).value = ''; });
         compensacionRecomendada = 0;
         $('alta-perdida-msg').innerText = '0 g';
-        $('alta-bano-msg').innerText = '0 ml';
+        $('alta-bano-msg').innerText = '0.00 ml';
         ocultar('alta-compensacion-motivo-caja');
     }
 
     function ocultarAccion() {
-        ['alta-aviso-accion', 'alta-btn-cargar-origen', 'alta-form-tecnico', 'alta-btn-guardar']
-            .forEach(ocultar);
+        ['alta-aviso-accion', 'alta-btn-cargar-origen', 'alta-form-tecnico', 'alta-btn-guardar',
+         'alta-aviso-guardado'].forEach(ocultar);
     }
 
     window.limpiarAlta = function () {
         busqueda = null;
+        tipoUsuario = '';
+        bloquearTipo(null);
         $('alta-of').value = '';
         $('alta-proceso').value = '';
         $('alta-proceso').disabled = true;
@@ -52,25 +105,27 @@
         ocultar('alta-datos-grabado');
         ocultarAccion();
         limpiarTecnicos();
-        $('alta-of').focus();
+        radiosTipo[0].focus();
     };
 
     // ---------------------------------------------------------- búsqueda
     function buscarOF() {
         const of = $('alta-of').value.trim();
-        if (!of) { alert('Ingresa un número de OF.'); return; }
+        if (!of) {
+            mostrarAviso('alta-aviso-externo', 'aviso--error', 'Ingresa un número de OF.');
+            return;
+        }
 
-        ocultar('alta-aviso-externo');
+        busqueda = null;
+        bloquearTipo(null);
         ocultar('alta-datos-grabado');
         ocultarAccion();
         limpiarTecnicos();
         mostrarAviso('alta-aviso-externo', 'aviso--info', 'Buscando datos de la OF...');
 
-        fetch(`/grabados/api/alta/buscar/?of=${encodeURIComponent(of)}`)
-            .then(r => r.json())
+        pedirJson(`/grabados/api/alta/buscar/?of=${encodeURIComponent(of)}`)
             .then(res => {
                 if (res.status !== 'ok') {
-                    busqueda = null;
                     mostrarAviso('alta-aviso-externo', 'aviso--error', res.message);
                     return;
                 }
@@ -88,10 +143,6 @@
                 } else {
                     selProceso.focus();
                 }
-            })
-            .catch(() => {
-                busqueda = null;
-                mostrarAviso('alta-aviso-externo', 'aviso--error', 'Error de conexión al buscar la OF.');
             });
     }
 
@@ -103,11 +154,11 @@
 
         if (!ext.encontrado) {
             mostrarAviso('alta-aviso-externo', 'aviso--advertencia',
-                'No se encontró esta OF en el sistema externo. Si es un alta nueva, escribe el cliente y la referencia a mano.');
+                'No se encontró esta OF en el sistema externo. Si es un grabado nuevo, escribe el cliente y la referencia a mano.');
         } else if (!ext.completo) {
             mostrarAviso('alta-aviso-externo', 'aviso--advertencia',
                 `La OF existe en el sistema externo, pero no tiene registrado: ${faltantes.join(', ')}. ` +
-                'Si es un alta nueva, escribe a mano los datos que faltan.');
+                'Si es un grabado nuevo, escribe a mano los datos que faltan.');
         } else if (faltantes.length) {
             mostrarAviso('alta-aviso-externo', 'aviso--ok',
                 'Se encontraron el cliente y la referencia en el sistema externo (sin sobre registrado).');
@@ -136,14 +187,12 @@
 
     function mostrarAccion() {
         ocultarAccion();
-        const proceso = $('alta-proceso').value;
-        if (!busqueda || !proceso) return;
+        bloquearTipo(null);
+        const evaluacion = evaluacionActual();
+        if (!evaluacion) return;
 
-        const evaluacion = busqueda.procesos[proceso];
         mostrarDatosGrabado(evaluacion);
-
-        const g = evaluacion.grabado;
-        const necesitaMaquina = evaluacion.accion === 'ALTA' || evaluacion.accion === 'RECHAZO_K1';
+        bloquearTipo(evaluacion.grabado);
 
         if (evaluacion.accion === 'BLOQUEADA') {
             mostrarAviso('alta-aviso-accion', 'aviso--error', '⛔ ' + evaluacion.mensaje);
@@ -159,15 +208,48 @@
             return;
         }
 
-        if (necesitaMaquina && !busqueda.hay_maquinas) {
-            mostrarAviso('alta-aviso-accion', 'aviso--error',
-                '⚠️ No hay máquinas activas registradas: hay que cargarlas en el administrador antes de registrar el K1.');
+        actualizarSegunTipo();
+        actualizarBanoAcumulado();
+    }
+
+    // Aviso de lo que va a pasar, formulario, campo de máquina y botón Guardar
+    // según el caso y (en el alta nueva) el tipo elegido. Se vuelve a llamar
+    // cada vez que cambia el tipo.
+    function actualizarSegunTipo() {
+        const evaluacion = evaluacionActual();
+        if (!evaluacion || evaluacion.accion === 'BLOQUEADA') return;
+        const g = evaluacion.grabado;
+        const proceso = $('alta-proceso').value;
+        const tipo = tipoElegido();
+        const conMaquina = necesitaMaquina(evaluacion);
+
+        // Alta nueva sin tipo: no se muestran los datos técnicos hasta elegirlo.
+        if (evaluacion.accion === 'ALTA' && !tipo) {
+            mostrarAviso('alta-aviso-accion', 'aviso--advertencia',
+                `Grabado nuevo ${busqueda.of} ${proceso}: elige arriba el tipo de grabado (K1 o Producción) para continuar.`);
+            ocultar('alta-form-tecnico');
+            ocultar('alta-btn-guardar');
             return;
         }
 
-        if (evaluacion.accion === 'ALTA') {
+        $('alta-form-tecnico').style.display = 'block';
+        $('alta-maquina-caja').style.display = conMaquina ? 'block' : 'none';
+        if (!conMaquina) $('alta-maquina').value = '';
+        $('alta-btn-guardar').style.display = 'inline-block';
+
+        if (conMaquina && !busqueda.hay_maquinas) {
+            mostrarAviso('alta-aviso-accion', 'aviso--error',
+                '⚠️ No hay máquinas activas registradas: hay que cargarlas en el administrador antes de registrar el K1.');
+            ocultar('alta-btn-guardar');
+            return;
+        }
+
+        if (evaluacion.accion === 'ALTA' && tipo === 'K1') {
             mostrarAviso('alta-aviso-accion', 'aviso--ok',
-                `Alta nueva: se crea el grabado ${busqueda.of} ${proceso}, su fabricación inicial y el K1 (intento 1). Quedará Pendiente de K1.`);
+                `Grabado nuevo K1: se crea el grabado ${busqueda.of} ${proceso}, su fabricación inicial y el K1 (intento 1). Quedará Pendiente de K1 hasta que un supervisor lo apruebe.`);
+        } else if (evaluacion.accion === 'ALTA') {
+            mostrarAviso('alta-aviso-accion', 'aviso--ok',
+                `Grabado nuevo de producción: se crea el grabado ${busqueda.of} ${proceso} con su fabricación inicial y queda Aprobado al guardar, sin K1 ni máquina.`);
         } else if (evaluacion.accion === 'RECHAZO_K1') {
             const siguiente = g.ultimo_intento_k1 + 1;
             const motivo = g.ultimo_motivo_rechazo ? ` Motivo del rechazo: "${g.ultimo_motivo_rechazo}".` : '';
@@ -177,11 +259,6 @@
             mostrarAviso('alta-aviso-accion', 'aviso--info',
                 'Grabado marcado para REPETIR: se registra la refabricación y vuelve directamente a Aprobado, sin K1.');
         }
-
-        $('alta-maquina-caja').style.display = necesitaMaquina ? 'block' : 'none';
-        $('alta-form-tecnico').style.display = 'block';
-        $('alta-btn-guardar').style.display = 'inline-block';
-        actualizarBanoAcumulado();
     }
 
     // ------------------------------------------- cálculos (igual que el PLANI)
@@ -204,8 +281,9 @@
         $('alta-perdida-msg').innerText = perdida.toFixed(0) + ' g';
 
         // Fórmula histórica: Pérdida(g) / 1000 × 6.6 ml (misma que el servidor).
+        // Con dos decimales: con pérdidas chicas (50 g -> 0.33 ml) el entero da 0.
         const mlBano = (perdida / 1000) * 6.6;
-        $('alta-bano-msg').innerText = mlBano.toFixed(0) + ' ml';
+        $('alta-bano-msg').innerText = mlBano.toFixed(2) + ' ml';
 
         compensacionRecomendada = Math.round(mlBano);
         $('alta-compensacion').value = mlBano > 0 ? compensacionRecomendada : '';
@@ -223,33 +301,58 @@
         if (!cambiado) $('alta-compensacion-motivo').value = '';
     }
 
+    // ------------------------------------------------------- red / errores
+    // Devuelve siempre {status, message, ...}: si el servidor responde algo que
+    // no es JSON (500, CSRF 403, etc.) o no hay conexión, arma el mensaje.
+    function pedirJson(url, opciones) {
+        return fetch(url, opciones)
+            .then(r => r.text().then(texto => {
+                try {
+                    return JSON.parse(texto);
+                } catch (e) {
+                    return { status: 'error', message: `Error del servidor (HTTP ${r.status}). Avísale al administrador.` };
+                }
+            }))
+            .catch(() => ({ status: 'error', message: 'Error de conexión con el servidor. Revisa la red e inténtalo de nuevo.' }));
+    }
+
     // ------------------------------------------------------------ guardado
     window.guardarAlta = function () {
-        if (!busqueda) return;
-        const proceso = $('alta-proceso').value;
-        const evaluacion = busqueda.procesos[proceso];
+        const evaluacion = evaluacionActual();
         if (!evaluacion || evaluacion.accion === 'BLOQUEADA') return;
-        const necesitaMaquina = evaluacion.accion !== 'REPETICION';
+        ocultar('alta-aviso-guardado');
+
+        // El tipo solo se manda en el alta nueva; en las refabricaciones manda el del grabado.
+        const tipo = evaluacion.accion === 'ALTA' ? tipoElegido() : null;
+        if (evaluacion.accion === 'ALTA' && !tipo) {
+            avisoGuardado('aviso--error', 'Selecciona el tipo de grabado: K1 (de prueba) o Producción (directo).');
+            return;
+        }
+        const conMaquina = necesitaMaquina(evaluacion);
 
         const obligatorios = [
             ['alta-responsables', 'Responsables'], ['alta-peso-i', 'Peso inicial'],
             ['alta-peso-f', 'Peso final'], ['alta-temp', 'Temperatura'], ['alta-rpm', 'RPM'],
         ];
-        if (necesitaMaquina) obligatorios.unshift(['alta-maquina', 'Máquina del K1']);
+        if (conMaquina) obligatorios.unshift(['alta-maquina', 'Máquina del K1']);
         if (!$('alta-referencia').readOnly) obligatorios.unshift(['alta-referencia', 'Referencia']);
         if (!$('alta-cliente').readOnly) obligatorios.unshift(['alta-cliente', 'Cliente']);
         const faltantes = obligatorios.filter(([id]) => !$(id).value.trim()).map(([, etiqueta]) => etiqueta);
-        if (faltantes.length) { alert('Faltan campos obligatorios: ' + faltantes.join(', ') + '.'); return; }
+        if (faltantes.length) {
+            avisoGuardado('aviso--error', 'Faltan campos obligatorios: ' + faltantes.join(', ') + '.');
+            return;
+        }
 
         if (compensacionCambiada() && !$('alta-compensacion-motivo').value.trim()) {
-            alert('Cambiaste la compensación del valor recomendado: explica el motivo antes de guardar.');
+            avisoGuardado('aviso--error', 'Cambiaste la compensación del valor recomendado: explica el motivo antes de guardar.');
             return;
         }
 
         const payload = {
             of: busqueda.of,
-            proceso: proceso,
-            maquina_id: necesitaMaquina ? $('alta-maquina').value : null,
+            proceso: $('alta-proceso').value,
+            tipo: tipo,
+            maquina_id: conMaquina ? $('alta-maquina').value : null,
             cliente: $('alta-cliente').value.trim(),
             referencia: $('alta-referencia').value.trim(),
             sobre: $('alta-sobre').value.trim(),
@@ -267,24 +370,25 @@
 
         const btn = $('alta-btn-guardar');
         btn.disabled = true;
-        fetch('/grabados/api/alta/registrar/', {
+        pedirJson('/grabados/api/alta/registrar/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
             body: JSON.stringify(payload),
         })
-            .then(r => r.json())
             .then(res => {
-                if (res.status !== 'ok') { alert('Error: ' + res.message); return; }
+                if (res.status !== 'ok') {
+                    avisoGuardado('aviso--error', 'No se guardó: ' + (res.message || 'error desconocido del servidor.'));
+                    return;
+                }
                 let mensaje = res.message;
                 if (res.bano) {
                     mensaje += res.bano.alerta
-                        ? `\n\n⚠️ Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml. ¡Hay que preparar un baño nuevo! (confírmalo en la Tabla de Consultas)`
-                        : `\n\nBaño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml de compensación acumulados.`;
+                        ? ` ⚠️ Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml. ¡Hay que preparar un baño nuevo! (confírmalo en la Tabla de Consultas)`
+                        : ` Baño: ${res.bano.ml_acumulados} / ${res.bano.limite} ml de compensación acumulados.`;
                 }
-                alert(mensaje);
                 window.limpiarAlta();
+                avisoGuardado(res.bano && res.bano.alerta ? 'aviso--advertencia' : 'aviso--ok', '✅ ' + mensaje);
             })
-            .catch(() => alert('Error de conexión al guardar.'))
             .finally(() => { btn.disabled = false; });
     };
 
@@ -293,11 +397,18 @@
         if (e.key === 'Enter') { e.preventDefault(); buscarOF(); }
     });
     $('alta-proceso').addEventListener('change', () => { limpiarTecnicos(); mostrarAccion(); });
+    radiosTipo.forEach(r => r.addEventListener('change', () => {
+        if (!r.checked || r.disabled) return;
+        tipoUsuario = r.value;
+        ocultar('alta-aviso-guardado');
+        actualizarSegunTipo();
+    }));
     $('alta-peso-i').addEventListener('input', calcularPerdida);
     $('alta-peso-f').addEventListener('input', calcularPerdida);
     $('alta-compensacion').addEventListener('input', verificarCambioCompensacion);
 
-    // Desde el PLANI ("Dar de alta" / "Refabricar"): /grabados/alta/?of=23304&proceso=STAMPING
+    // Desde el PLANI ("Crear grabado" / "Refabricar"): /grabados/alta/?of=23304&proceso=STAMPING.
+    // Llega sin tipo: si es un grabado nuevo, la pantalla pide elegirlo.
     const parametros = new URLSearchParams(window.location.search);
     const ofInicial = (parametros.get('of') || '').trim();
     if (ofInicial) {
@@ -305,5 +416,7 @@
         procesoInicial = ['STAMPING', 'EMBOSSING'].includes(proceso) ? proceso : null;
         $('alta-of').value = ofInicial;
         buscarOF();
+    } else {
+        radiosTipo[0].focus();
     }
 })();

@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static estaticos %}
 
 {% block title %}Programación de Producción (Planning) | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
-<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
-<link rel="stylesheet" href="{% static 'css/componentes/panel_grabado.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
 <style>
     /* Estilos propios del PLANI (ver views.sincronizar_plani y views_grabados.api_plani_*).
        Las etiquetas de estado reutilizan .pg-etiqueta del panel de detalle. */
@@ -23,7 +23,7 @@
     .plani-pagina .tabla-registros tbody td { padding: 6px 12px; }
 
     /* ---- Columna "Grabado": misma tarjeta compacta en todas las filas ----
-       Línea 1: estado + botón ojo + botón de acción (a la derecha, ancho fijo) ·
+       Línea 1: estado + tipo (abreviado) + botón ojo + botón de acción (a la derecha, ancho fijo) ·
        Línea 2 (solo si existe): nota en una línea, cortada con "..." (texto
        completo en el title). Los colores de estado son los de .pg-etiqueta
        (panel de detalle / Inventario). */
@@ -33,6 +33,7 @@
     .plani-tarjeta__cabecera { display: flex; align-items: center; gap: 6px; min-height: 28px; min-width: 0; }
     .plani-tarjeta__cabecera .pg-etiqueta { min-width: 0; overflow: hidden; text-overflow: ellipsis;
                                             font-size: 11px; padding: 2px 7px; }
+    .plani-tarjeta__cabecera .plani-tipo { flex-shrink: 0; padding: 1px 6px; font-size: 10.5px; }
     .plani-ojo { flex-shrink: 0; width: 24px; height: 24px; display: inline-flex; align-items: center;
                  justify-content: center; border: 1px solid #d7e3db; border-radius: 6px; background: #fff;
                  color: #2d8a3e; cursor: pointer; padding: 0; }
@@ -111,7 +112,7 @@
         </svg>
         Programación de Producción (Planning)
       </h1>
-      <p class="pagina-descripcion">Manda los grabados a máquina y recógelos. Los datos técnicos se registran en Alta de Grabado.</p>
+      <p class="pagina-descripcion">Manda los grabados a máquina y recógelos. Los datos técnicos se registran en Crear Grabado.</p>
     </div>
     <div class="tabla-cabecera__contador" id="plani-contador"></div>
   </header>
@@ -244,6 +245,6 @@
 
 {{ maquinas_activas|json_script:"plani-maquinas-activas" }}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="{% static 'js/componentes/panel_grabado.js' %}"></script>
-<script src="{% static 'js/plani_tabla.js' %}"></script>
+<script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/plani_tabla.js' %}"></script>
 {% endblock %}

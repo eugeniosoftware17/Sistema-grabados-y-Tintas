@@ -72,17 +72,26 @@
                 ${dato('OF de origen', escapar(d.of_origen))}
                 ${dato('Proceso', escapar(d.proceso))}
                 ${dato('Estado', etiqueta(d.estado, d.estado_display))}
+                ${dato('Tipo', etiqueta('tipo-' + d.tipo, d.tipo_display))}
                 ${dato('Cliente', escapar(d.cliente), true)}
                 ${dato('Referencia', escapar(d.referencia), true)}
                 ${dato('Sobre', escapar(d.sobre))}
-                ${dato('Origen de los datos', origen)}
-                ${d.aprobado_legado ? dato('Aprobación', etiqueta('neutra', 'Legado (sin K1)')) : ''}
-            </dl>`);
+                ${dato('Origen de los datos', origen)}            </dl>`);
+    }
+
+    // Grabados que no pasan por K1 (Grabado.tipo DIRECTO o LEGADO).
+    function sinK1(d) {
+        return d.tipo === 'DIRECTO'
+            ? 'Grabado de producción directa: se aprobó al crearlo, sin K1.'
+            : 'Grabado migrado del sistema anterior: nunca pasó K1 en EIS.';
     }
 
     function htmlK1Actual(d) {
         const k1 = d.k1_actual;
-        if (!k1) return seccion('K1 actual', '<p class="pg-vacio">Este grabado no tiene un K1 pendiente.</p>');
+        if (!k1) {
+            const texto = d.tipo === 'K1' ? 'Este grabado no tiene un K1 pendiente.' : sinK1(d);
+            return seccion('K1 actual', `<p class="pg-vacio">${escapar(texto)}</p>`);
+        }
         return seccion('K1 actual', `
             <dl class="pg-datos">
                 ${dato('Intento', escapar(k1.intento))}
@@ -146,7 +155,8 @@
 
     function htmlIntentosK1(d) {
         if (!d.pruebas_k1.length) {
-            return seccion('Historial de intentos K1', '<p class="pg-vacio">Sin pruebas K1 registradas.</p>');
+            const texto = d.tipo === 'K1' ? 'Sin pruebas K1 registradas.' : sinK1(d);
+            return seccion('Historial de intentos K1', `<p class="pg-vacio">${escapar(texto)}</p>`);
         }
         const items = d.pruebas_k1.slice().reverse().map(p => {
             const decision = p.decidido_por

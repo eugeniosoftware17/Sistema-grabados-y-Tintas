@@ -1,7 +1,8 @@
 """
 Pantallas de la reestructuración (fase 2), sobre los modelos nuevos:
-- Alta de grabado: registra la fabricación de un grabado nuevo, la
-  refabricación tras un K1 rechazado o la refabricación por REPETIR.
+- Crear Grabado: registra la fabricación de un grabado nuevo (K1 de prueba o
+  de producción directa), la refabricación tras un K1 rechazado o la
+  refabricación por REPETIR.
 - K1 pendientes: los supervisores aprueban o rechazan las pruebas K1.
 
 Las vistas solo parsean el request y devuelven JsonResponse; las reglas de
@@ -39,7 +40,7 @@ def _of_normalizada(valor):
 
 
 # ============================================================
-# ALTA DE GRABADO
+# CREAR GRABADO (URL /grabados/alta/)
 # ============================================================
 
 @login_required
@@ -109,6 +110,7 @@ def api_alta_registrar(request):
                 'sobre': data.get('sobre'),
             },
             usuario=request.user,
+            tipo=str(data.get('tipo') or '').strip().upper() or None,
         )
     except servicio.ErrorGrabado as e:
         return _error(e.mensaje, status=e.status)
@@ -116,6 +118,9 @@ def api_alta_registrar(request):
     grabado, prueba = resultado['grabado'], resultado['prueba_k1']
     if resultado['accion'] == servicio.ACCION_REPETICION:
         mensaje = f'Refabricación registrada. El grabado {grabado.of_origen} {grabado.proceso} vuelve a APROBADO.'
+    elif prueba is None:
+        mensaje = (f'Grabado de producción registrado. El grabado {grabado.of_origen} {grabado.proceso} '
+                   'queda APROBADO, sin K1.')
     else:
         mensaje = (f'Fabricación registrada. El grabado {grabado.of_origen} {grabado.proceso} '
                    f'queda pendiente de K1 (intento {prueba.intento}, {prueba.maquina}).')
@@ -125,6 +130,7 @@ def api_alta_registrar(request):
         'message': mensaje,
         'accion': resultado['accion'],
         'estado': grabado.estado,
+        'tipo': grabado.tipo,
     }
     if resultado['bano']:
         respuesta['bano'] = resultado['bano']
@@ -233,23 +239,28 @@ def api_k1_rechazar(request, prueba_id):
 def inventario_grabados(request):
     return render(request, 'inventario_grabados.html', {
         'estados': Grabado.ESTADO_CHOICES,
+        'tipos': Grabado.TIPO_CHOICES,
     })
 
 
 @login_required
 def api_inventario(request):
     """Conteos por estado y listado de grabados, con filtros opcionales
-    ?q=texto&proceso=STAMPING|EMBOSSING&estado=<estado>. Solo lectura."""
+    ?q=texto&proceso=STAMPING|EMBOSSING&estado=<estado>&tipo=K1|DIRECTO|LEGADO. Solo lectura."""
     if request.method != 'GET':
         return _error('Método no permitido', status=405)
     q = request.GET.get('q', '').strip()
     proceso = request.GET.get('proceso', '').strip().upper()
     estado = request.GET.get('estado', '').strip().upper()
+    tipo = request.GET.get('tipo', '').strip().upper()
     if proceso and proceso not in servicio.PROCESOS_VALIDOS:
         return _error('Proceso inválido.')
     if estado and estado not in selectors.ESTADOS_GRABADO:
         return _error('Estado inválido.')
-    return JsonResponse({'status': 'ok', **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado)})
+    if tipo and tipo not in selectors.TIPOS_GRABADO:
+        return _error('Tipo inválido.')
+    return JsonResponse({'status': 'ok',
+                         **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado, tipo=tipo)})
 
 
 # ============================================================

@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static estaticos %}
 
-{% block title %}Alta de Grabado | CIGAR RINGS{% endblock %}
+{% block title %}Crear Grabado | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
-<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
 {% endblock %}
 
 {% block content %}
@@ -17,31 +17,52 @@
         <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>
         </svg>
-        Alta de Grabado
+        Crear Grabado
       </h1>
-      <p class="pagina-descripcion">Registra la fabricación de un grabado nuevo o su refabricación.</p>
+      <p class="pagina-descripcion">Registra la fabricación de un grabado nuevo (K1 de prueba o de producción) o su refabricación.</p>
     </div>
   </header>
 
   {% if not maquinas %}
     <div class="aviso aviso--error" id="alta-aviso-sin-maquinas">
-      ⚠️ No hay máquinas activas registradas. Antes de dar de alta grabados hay que cargar las máquinas en
+      ⚠️ No hay máquinas activas registradas. Antes de crear grabados K1 hay que cargar las máquinas en
       el catálogo desde el administrador (<a href="/crdadmin/gestion_grabados/maquina/">Máquinas</a>).
+      Los grabados de producción no necesitan máquina.
     </div>
   {% endif %}
 
   <div class="dashboard-card">
     <div class="dashboard-cabecera">
-      <h3>Buscar OF</h3>
-      <p>Escribe la OF de origen del grabado y presiona Enter</p>
+      <h3>Nuevo grabado</h3>
+      <p>Elige el tipo de grabado, escribe la OF de origen y presiona Enter</p>
     </div>
 
     <div class="dashboard-cuerpo">
+        <!-- Primero se elige el tipo. Si la OF ya tiene grabado (refabricación), se bloquea
+             mostrando el tipo que ya tiene. -->
+        <fieldset class="tipo-grabado" id="alta-tipo-caja">
+          <legend>1. Tipo de grabado: <span class="obligatorio">*</span></legend>
+          <!-- Interruptor de dos opciones: radios ocultos (accesibles con teclado) dentro de cada botón. -->
+          <div class="tipo-interruptor">
+            <label class="tipo-interruptor__opcion"
+                   title="Se fabrica para probarlo: queda Pendiente de K1 hasta que un supervisor lo apruebe. Pide la máquina del K1.">
+              <input type="radio" name="alta-tipo" value="K1">
+              <span>K1 – Prueba</span>
+            </label>
+            <label class="tipo-interruptor__opcion"
+                   title="Ya se sabe cómo debe quedar: queda Aprobado al guardar, sin K1 ni máquina.">
+              <input type="radio" name="alta-tipo" value="DIRECTO">
+              <span>Producción</span>
+            </label>
+          </div>
+          <p class="tipo-grabado__nota" id="alta-tipo-nota" style="display:none;"></p>
+        </fieldset>
+
       <div class="rejilla-campos rejilla-campos--dos">
         <div class="campo-grupo">
-          <label for="alta-of">Número de OF:</label>
+          <label for="alta-of">2. Número de OF:</label>
           <input type="text" id="alta-of" class="control-entrada" placeholder="Ej: 22741"
-                 autocomplete="off" inputmode="numeric" autofocus>
+                 autocomplete="off" inputmode="numeric">
         </div>
         <div class="campo-grupo">
           <label for="alta-proceso">Proceso:</label>
@@ -76,6 +97,7 @@
       <!-- FORMULARIO TÉCNICO (mismos campos que FabricacionGrabado) -->
       <form id="alta-form-tecnico" style="display:none;" onsubmit="return false;">
         <hr class="separador">
+
         <p class="titulo-seccion">Datos técnicos de la fabricación</p>
 
         <div class="rejilla-campos">
@@ -124,7 +146,7 @@
               </div>
               <div class="resumen-bano__sugerido">
                 <small>Fórmula: Pérdida × 6.6</small>
-                Baño sugerido: <strong id="alta-bano-msg" style="font-size: 16px">0 ml</strong>
+                Baño sugerido: <strong id="alta-bano-msg" style="font-size: 16px">0.00 ml</strong>
               </div>
             </div>
             <div id="alta-bano-acumulado-caja" class="aviso aviso--info" style="text-align: center; font-size: 12px;">
@@ -139,6 +161,9 @@
           </div>
         </div>
       </form>
+
+      <!-- Errores de validación o del servidor al guardar, y la confirmación. -->
+      <div id="alta-aviso-guardado" class="aviso" role="alert" style="display:none;"></div>
     </div>
 
     <div class="dashboard-pie">
@@ -149,5 +174,5 @@
 
 </div>
 
-<script src="{% static 'js/alta_grabado.js' %}"></script>
+<script src="{% static_v 'js/alta_grabado.js' %}"></script>
 {% endblock %}

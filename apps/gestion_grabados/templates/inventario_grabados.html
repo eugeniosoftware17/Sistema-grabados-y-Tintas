@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static estaticos %}
 
 {% block title %}Inventario de Grabados | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
-<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
-<link rel="stylesheet" href="{% static 'css/componentes/panel_grabado.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
 <style>
     /* Estilos propios del Inventario de Grabados (ver views_grabados.py).
        Las etiquetas de estado reutilizan .pg-etiqueta del panel de detalle. */
@@ -112,6 +112,12 @@
         <option value="STAMPING">STAMPING</option>
         <option value="EMBOSSING">EMBOSSING</option>
       </select>
+      <select id="inv-tipo" class="inv-select" aria-label="Filtrar por tipo de grabado">
+        <option value="">Todos los tipos</option>
+        {% for codigo, nombre in tipos %}
+          <option value="{{ codigo }}">{{ nombre }}</option>
+        {% endfor %}
+      </select>
       <div class="inv-filtro-activo" id="inv-filtro-activo">
         Estado: <button type="button" id="inv-quitar-estado" aria-label="Quitar filtro de estado"></button>
       </div>
@@ -128,20 +134,21 @@
             <th>Cliente</th>
             <th>Referencia</th>
             <th>Estado</th>
+            <th>Tipo</th>
             <th class="inv-centrado">Intentos K1</th>
             <th>Último K1</th>
             <th class="inv-centrado">Usos</th>
             <th>Ubicación</th>
-            <th>Fecha de alta</th>
+            <th>Fecha de creación</th>
           </tr>
         </thead>
         <tbody id="inv-cuerpo">
-          <tr><td colspan="10" class="tabla-sin-resultados">Cargando...</td></tr>
+          <tr><td colspan="11" class="tabla-sin-resultados">Cargando...</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-<script src="{% static 'js/componentes/panel_grabado.js' %}"></script>
-<script src="{% static 'js/inventario_grabados.js' %}"></script>
+<script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/inventario_grabados.js' %}"></script>
 {% endblock %}

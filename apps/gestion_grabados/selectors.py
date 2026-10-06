@@ -131,7 +131,8 @@ def detalle_grabado(grabado_id, usuario):
         'referencia': grabado.referencia,
         'sobre': grabado.sobre,
         'datos_manuales': grabado.datos_manuales,
-        'aprobado_legado': grabado.aprobado_legado,
+        'tipo': grabado.tipo,
+        'tipo_display': grabado.get_tipo_display(),
         'ubicacion': grabado.ubicacion,
         'usos_acumulados': grabado.usos_acumulados,
         'creado_por': _usuario(grabado.creado_por),
@@ -148,6 +149,7 @@ def detalle_grabado(grabado_id, usuario):
 # ============================================================
 
 ESTADOS_GRABADO = [codigo for codigo, _ in Grabado.ESTADO_CHOICES]
+TIPOS_GRABADO = [codigo for codigo, _ in Grabado.TIPO_CHOICES]
 RESULTADOS_K1 = dict(PruebaK1.RESULTADO_CHOICES)
 
 # Tope de filas por respuesta; con más resultados la pantalla pide afinar la búsqueda.
@@ -163,15 +165,17 @@ def _filtrar_busqueda(queryset, q):
     return queryset
 
 
-def inventario_grabados(q='', proceso='', estado=''):
+def inventario_grabados(q='', proceso='', estado='', tipo=''):
     """Grabados para la pantalla de Inventario.
-    - 'conteos': grabados por estado, respetando búsqueda y proceso (no el
+    - 'conteos': grabados por estado, respetando búsqueda, proceso y tipo (no el
       filtro de estado, para que las tarjetas muestren el reparto completo).
     - 'filas': hasta LIMITE_INVENTARIO grabados, del más nuevo al más viejo.
     - 'total': cuántos cumplen todos los filtros (puede superar el límite)."""
     base = _filtrar_busqueda(Grabado.objects.all(), q)
     if proceso:
         base = base.filter(proceso=proceso)
+    if tipo:
+        base = base.filter(tipo=tipo)
 
     conteos = dict.fromkeys(ESTADOS_GRABADO, 0)
     for fila in base.values('estado').annotate(n=Count('id')).order_by():
@@ -190,11 +194,12 @@ def inventario_grabados(q='', proceso='', estado=''):
              .annotate(intentos_k1=Coalesce(Subquery(intentos, output_field=IntegerField()), Value(0)),
                        ultimo_k1=Subquery(ultimo))
              .order_by('-creado_el', '-id')
-             .values('id', 'of_origen', 'proceso', 'cliente', 'referencia', 'estado',
+             .values('id', 'of_origen', 'proceso', 'cliente', 'referencia', 'estado', 'tipo',
                      'intentos_k1', 'ultimo_k1', 'usos_acumulados', 'ubicacion', 'creado_el')
              [:LIMITE_INVENTARIO])
 
     estados_display = dict(Grabado.ESTADO_CHOICES)
+    tipos_display = dict(Grabado.TIPO_CHOICES)
     datos = [{
         'id': f['id'],
         'of_origen': f['of_origen'],
@@ -203,6 +208,8 @@ def inventario_grabados(q='', proceso='', estado=''):
         'referencia': f['referencia'],
         'estado': f['estado'],
         'estado_display': estados_display.get(f['estado'], f['estado']),
+        'tipo': f['tipo'],
+        'tipo_display': tipos_display.get(f['tipo'], f['tipo']),
         'intentos_k1': f['intentos_k1'],
         'ultimo_k1': f['ultimo_k1'],
         'ultimo_k1_display': RESULTADOS_K1.get(f['ultimo_k1']),
@@ -277,6 +284,8 @@ def _resumen_grabado_plani(grabado, of):
         'proceso': grabado.proceso,
         'estado': grabado.estado,
         'estado_display': grabado.get_estado_display(),
+        'tipo': grabado.tipo,
+        'tipo_display': grabado.get_tipo_display(),
         'ubicacion': grabado.ubicacion,
         'usa_grabado_de_otra': grabado.of_origen != of,
     }

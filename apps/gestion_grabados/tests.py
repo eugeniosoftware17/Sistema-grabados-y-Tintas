@@ -1,5 +1,5 @@
 """
-Pruebas de los modelos nuevos: alta de grabado y decisión de K1 (fase 2),
+Pruebas de los modelos nuevos: Crear Grabado (K1 o directo) y decisión de K1 (fase 2),
 inventario, y PLANI con envío a máquina y recogida (fase 3), y el comando
 migrar_a_grabados (fase 4).
 
@@ -67,7 +67,7 @@ class BaseGrabados(TestCase):
         cls.admin = User.objects.create_superuser('admin', password='x')
 
     def registrar(self, of='22741', proceso='STAMPING', info=None, usuario=None,
-                  maquina_id=None, datos_manuales=None, **cambios_tecnicos):
+                  maquina_id=None, datos_manuales=None, tipo='K1', **cambios_tecnicos):
         return servicio.registrar_fabricacion(
             of_origen=of, proceso=proceso,
             info_externa=info if info is not None else info_externa(),
@@ -76,6 +76,7 @@ class BaseGrabados(TestCase):
             maquina_id=maquina_id if maquina_id is not None else self.maquina.id,
             datos_manuales=datos_manuales or {},
             usuario=usuario or self.operario,
+            tipo=tipo,
         )
 
 
@@ -91,6 +92,7 @@ class RegistrarFabricacionTests(BaseGrabados):
         grabado = Grabado.objects.get(of_origen='22741', proceso='STAMPING')
         self.assertEqual(resultado['accion'], servicio.ACCION_ALTA)
         self.assertEqual(grabado.estado, 'PENDIENTE_K1')
+        self.assertEqual(grabado.tipo, 'K1')
         self.assertEqual(grabado.cliente, 'CLIENTE SA')
         self.assertEqual(grabado.referencia, 'ANILLA DORADA')
         self.assertEqual(grabado.sobre, 'S-10')
@@ -247,6 +249,69 @@ class RegistrarFabricacionTests(BaseGrabados):
         self.assertEqual(grabado.fabricaciones.count(), 2)
         self.assertEqual(grabado.pruebas_k1.count(), 1)
 
+    def test_directo_queda_aprobado_sin_k1_ni_maquina(self):
+        resultado = self.registrar(tipo='DIRECTO', maquina_id='')
+
+        grabado = Grabado.objects.get()
+        self.assertEqual(resultado['accion'], servicio.ACCION_ALTA)
+        self.assertEqual((grabado.tipo, grabado.estado), ('DIRECTO', 'APROBADO'))
+        self.assertIsNone(resultado['prueba_k1'])
+        self.assertFalse(PruebaK1.objects.exists())
+        fabricacion = grabado.fabricaciones.get()
+        self.assertEqual((fabricacion.numero, fabricacion.tipo), (1, 'INICIAL'))
+        self.assertEqual((fabricacion.perdida, fabricacion.temp, fabricacion.rpm), (1000, 150, 800))
+        # El baño se suma igual que en un K1.
+        self.assertAlmostEqual(EstadoBano.obtener().ml_acumulados, 6.6)
+
+    def test_directo_ignora_la_maquina_aunque_llegue(self):
+        self.registrar(tipo='DIRECTO', maquina_id=self.maquina_inactiva.id)
+        self.assertEqual(Grabado.objects.get().estado, 'APROBADO')
+        self.assertFalse(PruebaK1.objects.exists())
+
+    def test_alta_exige_tipo_valido(self):
+        for tipo in (None, '', 'LEGADO', 'OTRO'):
+            with self.subTest(tipo=tipo):
+                with self.assertRaisesMessage(servicio.ErrorGrabado, 'tipo de grabado'):
+                    self.registrar(tipo=tipo)
+        self.assertFalse(Grabado.objects.exists())
+
+    def test_rechazo_k1_ignora_el_tipo_enviado(self):
+        primera = self.registrar()
+        servicio.decidir_k1(prueba_id=primera['prueba_k1'].id, usuario=self.supervisor,
+                            aprobar=False, motivo='Relieve incompleto')
+        resultado = self.registrar(tipo='DIRECTO')
+        grabado = Grabado.objects.get()
+        self.assertEqual(resultado['accion'], servicio.ACCION_RECHAZO_K1)
+        self.assertEqual((grabado.tipo, grabado.estado), ('K1', 'PENDIENTE_K1'))
+        self.assertEqual(resultado['prueba_k1'].intento, 2)
+
+    def test_directo_en_repetir_se_refabrica_sin_k1(self):
+        self.registrar(tipo='DIRECTO', maquina_id='')
+        Grabado.objects.update(estado='REPETIR')
+
+        resultado = self.registrar(tipo=None, maquina_id='')
+        grabado = Grabado.objects.get()
+        self.assertEqual(resultado['accion'], servicio.ACCION_REPETICION)
+        self.assertEqual((grabado.tipo, grabado.estado), ('DIRECTO', 'APROBADO'))
+        self.assertEqual(list(grabado.fabricaciones.order_by('numero').values_list('tipo', flat=True)),
+                         ['INICIAL', 'REPETICION'])
+        self.assertFalse(PruebaK1.objects.exists())
+
+    def test_en_fabricacion_solo_abre_k1_en_grabados_k1(self):
+        # Un DIRECTO o LEGADO nunca debería quedar EN_FABRICACION; si pasa, se bloquea.
+        for tipo in ('DIRECTO', 'LEGADO'):
+            with self.subTest(tipo=tipo):
+                Grabado.objects.all().delete()
+                Grabado.objects.create(of_origen='22741', proceso='STAMPING', cliente='C',
+                                       tipo=tipo, estado='EN_FABRICACION')
+                evaluacion = servicio.evaluar_alta('22741', 'STAMPING', info_externa(), _normalizar_of)
+                self.assertEqual(evaluacion['accion'], servicio.ACCION_BLOQUEADA)
+                self.assertEqual(evaluacion['bloqueo'], servicio.BLOQUEO_ESTADO)
+                self.assertEqual(evaluacion['grabado']['tipo'], tipo)
+                with self.assertRaises(servicio.TransicionInvalida):
+                    self.registrar()
+        self.assertFalse(FabricacionGrabado.objects.exists())
+
     def test_otros_estados_no_permiten_registrar(self):
         self.registrar()
         for estado in ('PENDIENTE_K1', 'APROBADO', 'EN_MAQUINA'):
@@ -356,6 +421,17 @@ class VistasAltaTests(BaseGrabados):
                 self.assertEqual(respuesta.status_code, 302)
                 self.assertIn('login', respuesta['Location'])
 
+    def test_pagina_se_llama_crear_grabado_y_pide_el_tipo(self):
+        respuesta = self.client.get(reverse('grabados:alta_grabado'))
+        self.assertContains(respuesta, 'Crear Grabado | CIGAR RINGS')
+        self.assertContains(respuesta, '>Crear Grabado</a')   # menú
+        self.assertNotContains(respuesta, 'Alta de Grabado')
+        self.assertContains(respuesta, 'name="alta-tipo" value="K1"')
+        self.assertContains(respuesta, 'name="alta-tipo" value="DIRECTO"')
+        self.assertContains(respuesta, '<span>K1 – Prueba</span>', html=True)
+        self.assertContains(respuesta, '<span>Producción</span>', html=True)
+        self.assertNotContains(respuesta, 'tipo-opcion__detalle')   # sin textos debajo, solo title
+
     def test_pagina_alta_lista_solo_maquinas_activas(self):
         respuesta = self.client.get(reverse('grabados:alta_grabado'))
         self.assertContains(respuesta, 'GIETZ 01')
@@ -394,19 +470,96 @@ class VistasAltaTests(BaseGrabados):
     def test_registrar_por_api(self, _mock):
         respuesta = self.client.post(
             reverse('grabados:api_alta_registrar'),
-            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'maquina_id': self.maquina.id,
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'tipo': 'K1', 'maquina_id': self.maquina.id,
                              'tecnicos': tecnicos()}),
             content_type='application/json',
         )
         self.assertEqual(respuesta.status_code, 200, respuesta.content)
-        self.assertEqual(respuesta.json()['estado'], 'PENDIENTE_K1')
+        self.assertEqual((respuesta.json()['estado'], respuesta.json()['tipo']), ('PENDIENTE_K1', 'K1'))
         self.assertIn('bano', respuesta.json())
+
+    @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa())
+    def test_registrar_directo_por_api_sin_maquina(self, _mock):
+        respuesta = self.client.post(
+            reverse('grabados:api_alta_registrar'),
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'tipo': 'directo', 'maquina_id': None,
+                             'tecnicos': tecnicos()}),
+            content_type='application/json',
+        )
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        datos = respuesta.json()
+        self.assertEqual((datos['estado'], datos['tipo']), ('APROBADO', 'DIRECTO'))
+        self.assertIn('sin K1', datos['message'])
+        self.assertIn('bano', datos)
+
+    def payload_directo_33333(self, **cambios):
+        """Caso reportado: Producción – directo, OF 33333 STAMPING que no está en
+        el sistema externo, datos a mano, pérdida de 50 g y compensación 0."""
+        payload = {
+            'of': '33333', 'proceso': 'STAMPING', 'tipo': 'DIRECTO', 'maquina_id': None,
+            'cliente': 'eugenio', 'referencia': '44444', 'sobre': '',
+            'tecnicos': {'responsables': 'Juan', 'tiempo': '32', 'peso_inicial': '800',
+                         'peso_final': '750', 'temp': '150', 'rpm': '500',
+                         'compensacion': '0', 'compensacion_motivo': ''},
+        }
+        payload.update(cambios)
+        return payload
+
+    def post_registrar(self, payload):
+        return self.client.post(reverse('grabados:api_alta_registrar'), data=json.dumps(payload),
+                                content_type='application/json')
+
+    @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa(encontrado=False))
+    def test_registrar_directo_caso_reportado_of_33333(self, _mock):
+        respuesta = self.post_registrar(self.payload_directo_33333())
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertEqual((respuesta.json()['estado'], respuesta.json()['tipo']), ('APROBADO', 'DIRECTO'))
+
+        grabado = Grabado.objects.get()
+        self.assertEqual((grabado.of_origen, grabado.cliente, grabado.referencia, grabado.sobre),
+                         ('33333', 'eugenio', '44444', None))
+        self.assertTrue(grabado.datos_manuales)
+        self.assertFalse(PruebaK1.objects.exists())
+        fabricacion = grabado.fabricaciones.get()
+        self.assertEqual((fabricacion.perdida, fabricacion.rpm, fabricacion.tiempo), (50, 500, '32'))
+        self.assertAlmostEqual(fabricacion.bano_ml, 0.33)
+        self.assertAlmostEqual(respuesta.json()['bano']['ml_acumulados'], 0.3)
+
+    @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa(encontrado=False))
+    def test_registrar_directo_sin_tipo_da_400_con_mensaje(self, _mock):
+        # Lo que mandaba la versión anterior del JS (cacheada en el navegador): sin 'tipo'.
+        payload = self.payload_directo_33333()
+        del payload['tipo']
+        respuesta = self.post_registrar(payload)
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(respuesta.json(),
+                         {'status': 'error', 'message': 'Selecciona el tipo de grabado (K1 o Producción).'})
+        self.assertFalse(Grabado.objects.exists())
+
+    def test_pagina_pide_el_tipo_antes_de_la_of_y_versiona_el_js(self):
+        html = self.client.get(reverse('grabados:alta_grabado')).content.decode()
+        self.assertLess(html.index('name="alta-tipo"'), html.index('id="alta-of"'))
+        self.assertIn('id="alta-aviso-guardado"', html)
+        # ?v=<fecha de modificación>: el navegador no reutiliza un JS viejo de su caché.
+        self.assertRegex(html, r'js/alta_grabado\.js\?v=\d+')
+
+    @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa())
+    def test_registrar_por_api_sin_tipo_falla(self, _mock):
+        respuesta = self.client.post(
+            reverse('grabados:api_alta_registrar'),
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'maquina_id': self.maquina.id,
+                             'tecnicos': tecnicos()}),
+            content_type='application/json',
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('tipo de grabado', respuesta.json()['message'])
+        self.assertFalse(Grabado.objects.exists())
 
     @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa())
     def test_registrar_por_api_con_error_de_validacion(self, _mock):
         respuesta = self.client.post(
             reverse('grabados:api_alta_registrar'),
-            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'maquina_id': self.maquina.id,
+            data=json.dumps({'of': '22741', 'proceso': 'STAMPING', 'tipo': 'K1', 'maquina_id': self.maquina.id,
                              'tecnicos': tecnicos(temp='')}),
             content_type='application/json',
         )
@@ -559,7 +712,18 @@ class DetalleGrabadoTests(BaseGrabados):
                          ('STAMPING', 'PENDIENTE_K1', 'Pendiente de K1'))
         self.assertEqual((d['cliente'], d['referencia'], d['sobre']), ('CLIENTE SA', 'ANILLA DORADA', 'S-10'))
         self.assertFalse(d['datos_manuales'])
+        self.assertEqual((d['tipo'], d['tipo_display']), ('K1', 'K1 – de prueba'))
+        self.assertNotIn('aprobado_legado', d)
         self.assertEqual(d['creado_por'], 'operario')
+
+    def test_detalle_de_grabado_directo(self):
+        directo = self.registrar(of='31000', tipo='DIRECTO', maquina_id='')['grabado']
+        self.client.force_login(self.consulta)
+        d = self.client.get(self.url(directo.id)).json()['data']
+        self.assertEqual((d['tipo'], d['tipo_display'], d['estado']), ('DIRECTO', 'Producción – directo', 'APROBADO'))
+        self.assertIsNone(d['k1_actual'])
+        self.assertEqual(d['pruebas_k1'], [])
+        self.assertEqual(len(d['fabricaciones']), 1)
 
     def test_k1_actual_con_la_fabricacion_en_prueba(self):
         k1 = self.detalle(self.supervisor)['k1_actual']
@@ -670,6 +834,8 @@ class InventarioGrabadosTests(BaseGrabados):
         self.assertContains(respuesta, reverse('grabados:inventario_grabados'))  # enlace del menú
         for codigo, _ in Grabado.ESTADO_CHOICES:
             self.assertContains(respuesta, f'data-estado="{codigo}"')
+        for codigo, _ in Grabado.TIPO_CHOICES:   # filtro por tipo
+            self.assertContains(respuesta, f'<option value="{codigo}">')
 
     def test_conteos_por_estado(self):
         res = self.api()
@@ -683,6 +849,7 @@ class InventarioGrabadosTests(BaseGrabados):
         g = filas['22741']
         self.assertEqual((g['proceso'], g['cliente'], g['referencia']), ('STAMPING', 'CLIENTE SA', 'ANILLA DORADA'))
         self.assertEqual((g['estado'], g['estado_display']), ('PENDIENTE_K1', 'Pendiente de K1'))
+        self.assertEqual((g['tipo'], g['tipo_display']), ('K1', 'K1 – de prueba'))
         self.assertEqual(g['intentos_k1'], 2)
         self.assertEqual((g['ultimo_k1'], g['ultimo_k1_display']), ('PENDIENTE', 'Pendiente'))
         self.assertRegex(g['creado_el'], r'^\d{2}/\d{2}/\d{4}$')
@@ -694,7 +861,7 @@ class InventarioGrabadosTests(BaseGrabados):
 
     def test_grabado_sin_k1_muestra_cero_intentos(self):
         Grabado.objects.create(of_origen='25000', proceso='STAMPING', cliente='X', estado='APROBADO',
-                               aprobado_legado=True)
+                               tipo='LEGADO')
         fila = next(g for g in self.api()['data'] if g['of_origen'] == '25000')
         self.assertEqual((fila['intentos_k1'], fila['ultimo_k1']), (0, None))
 
@@ -717,8 +884,19 @@ class InventarioGrabadosTests(BaseGrabados):
         self.assertEqual(res['conteos']['PENDIENTE_K1'], 0)
         self.assertEqual(res['conteos']['APROBADO'], 1)
 
+    def test_filtro_por_tipo_afecta_conteos(self):
+        self.registrar(of='24000', tipo='DIRECTO', maquina_id='')
+        Grabado.objects.create(of_origen='25000', proceso='STAMPING', cliente='X', estado='APROBADO',
+                               tipo='LEGADO')
+        res = self.api(tipo='DIRECTO')
+        self.assertEqual(self.ofs(res), ['24000'])
+        self.assertEqual(res['conteos']['APROBADO'], 1)
+        self.assertEqual(res['conteos']['PENDIENTE_K1'], 0)
+        self.assertEqual(self.ofs(self.api(tipo='legado')), ['25000'])
+        self.assertEqual(self.ofs(self.api(tipo='K1')), ['22741', '22800', '22900'])
+
     def test_filtros_invalidos(self):
-        for params in ({'proceso': 'OTRO'}, {'estado': 'PENDIENTE'}):
+        for params in ({'proceso': 'OTRO'}, {'estado': 'PENDIENTE'}, {'tipo': 'OTRO'}):
             with self.subTest(params=params):
                 respuesta = self.client.get(reverse('grabados:api_inventario'), params)
                 self.assertEqual(respuesta.status_code, 400)
@@ -807,9 +985,18 @@ class PlaniResolucionTests(BasePlani):
         grabado = self.aprobado()
         propia, ajena = self.resolver(fila_plani('22741'), fila_plani('23000', of_stamping='22741'))
         self.assertEqual((propia['accion'], propia['grabado']['id']), (selectors.PLANI_MANDAR, grabado.id))
+        self.assertEqual((propia['grabado']['tipo'], propia['grabado']['tipo_display']), ('K1', 'K1 – de prueba'))
         self.assertFalse(propia['grabado']['usa_grabado_de_otra'])
         self.assertEqual((ajena['accion'], ajena['grabado']['id']), (selectors.PLANI_MANDAR, grabado.id))
         self.assertTrue(ajena['grabado']['usa_grabado_de_otra'])
+
+    def test_grabado_directo_se_puede_mandar_enseguida(self):
+        grabado = self.registrar(tipo='DIRECTO', maquina_id='')['grabado']
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual((estado['accion'], estado['grabado']['id']), (selectors.PLANI_MANDAR, grabado.id))
+        self.assertEqual(estado['grabado']['tipo'], 'DIRECTO')
+        envio = self.mandar(grabado)
+        self.assertEqual(envio.grabado.estado, 'EN_MAQUINA')
 
     def test_en_maquina_recoger_esta_of_y_bloquear_las_demas(self):
         grabado = self.aprobado()
@@ -1094,7 +1281,7 @@ class FabricacionRetiradaTests(BaseGrabados):
                 respuesta = self.client.post(reverse(f'grabados:{nombre}'), data=json.dumps(datos),
                                              content_type='application/json')
                 self.assertEqual(respuesta.status_code, 410)
-                self.assertIn('Alta de Grabado', respuesta.json()['message'])
+                self.assertIn('Crear Grabado', respuesta.json()['message'])
         self.assertFalse(OrdenFabricacion.objects.exists())
 
     def test_pantallas_legadas_marcadas_como_historico(self):
@@ -1172,7 +1359,7 @@ class MigrarAGrabadosTests(TestCase):
 
         grabado = Grabado.objects.get()
         self.assertEqual((grabado.of_origen, grabado.proceso, grabado.estado), ('22741', 'STAMPING', 'APROBADO'))
-        self.assertTrue(grabado.aprobado_legado)
+        self.assertEqual(grabado.tipo, 'LEGADO')
         self.assertFalse(grabado.pruebas_k1.exists())
         self.assertEqual(grabado.usos_acumulados, 7)  # el PENDIENTE no cuenta
 
@@ -1290,10 +1477,10 @@ class MigrarAGrabadosTests(TestCase):
 
         self.assertEqual(Grabado.objects.count(), 1)
         existente.refresh_from_db()
-        self.assertEqual((existente.estado, existente.aprobado_legado, existente.cliente),
-                         ('PENDIENTE_K1', False, 'ALTA'))
+        self.assertEqual((existente.estado, existente.tipo, existente.cliente),
+                         ('PENDIENTE_K1', 'K1', 'ALTA'))
         self.assertEqual(existente.usos_acumulados, 7)
-        self.assertIn('el grabado de Alta está en PENDIENTE_K1', salida)
+        self.assertIn('el grabado creado en EIS está en PENDIENTE_K1', salida)
 
     def test_conciliacion_que_no_cuadra_revierte_todo(self):
         self.orden('22741')

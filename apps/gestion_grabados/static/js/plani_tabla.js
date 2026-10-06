@@ -2,7 +2,7 @@
    PLANI (fase 3): mandar el grabado a máquina y recogerlo.
    - La acción de cada fila la decide el servidor (fila.grabado.accion,
      ver selectors.estado_grabados_para_plani); aquí solo se pinta.
-   - Ya no se cargan datos técnicos: eso es Alta de Grabado.
+   - Ya no se cargan datos técnicos: eso es Crear Grabado.
    - El detalle del grabado se abre con el componente PanelGrabado.
    ============================================================ */
 
@@ -144,6 +144,15 @@
         return escapar(valor).replace(/"/g, '&quot;');
     }
 
+    // Tipo del grabado abreviado para la tarjeta compacta (el nombre completo va en el title).
+    const TIPOS_CORTOS = { K1: 'K1', DIRECTO: 'Prod.', LEGADO: 'Legado' };
+
+    function etiquetaTipo(g) {
+        if (!g || !g.tipo) return '';
+        return `<span class="pg-etiqueta pg-etiqueta--tipo-${escapar(g.tipo)} plani-tipo" title="${escaparAtributo(g.tipo_display)}">` +
+               `${escapar(TIPOS_CORTOS[g.tipo] || g.tipo)}</span>`;
+    }
+
     function tarjeta({ estado, grabado, nota, accion }) {
         const ojo = grabado
             ? `<button type="button" class="plani-ojo" data-accion="ver" title="Ver grabado"
@@ -156,7 +165,7 @@
             ? `<button type="button" class="boton plani-accion plani-accion--${accion.estilo}" data-accion="${accion.codigo}">${escapar(accion.texto)}</button>`
             : '';
         return `<div class="plani-tarjeta">
-                    <div class="plani-tarjeta__cabecera">${etiqueta(estado[0], estado[1])}${ojo}${boton}</div>
+                    <div class="plani-tarjeta__cabecera">${etiqueta(estado[0], estado[1])}${etiquetaTipo(grabado)}${ojo}${boton}</div>
                     ${notaHtml}
                 </div>`;
     }
@@ -182,7 +191,7 @@
                     estado: ['neutra', 'Sin grabado'],
                     // Solo si usa el grabado de otra OF; "Sin grabado" ya lo dice todo en el otro caso.
                     nota: e.alta && e.alta.of !== String(fila.of) ? { icono: 'enlace', texto: e.mensaje } : null,
-                    accion: { codigo: 'alta', texto: 'Dar de alta', estilo: 'contorno' },
+                    accion: { codigo: 'alta', texto: 'Crear grabado', estilo: 'contorno' },
                 });
             case 'SIN_ACCION':
                 return tarjeta({
@@ -274,7 +283,8 @@
                 'OF': f.of, 'OF Ref.': sinDato(f.ref_ext) ? '' : f.ref_ext, 'Descripción': f.descripcion || '',
                 'Cliente': f.cliente || '', 'Proceso': f.proceso, 'Máquina': f.maquina || '',
                 'Fecha prog.': f.fecha_programada || '', 'Grabado': e.grabado ? e.grabado.of_origen : '',
-                'Estado del grabado': e.grabado ? e.grabado.estado_display : '', 'Situación': e.mensaje || '',
+                'Estado del grabado': e.grabado ? e.grabado.estado_display : '',
+                'Tipo de grabado': e.grabado ? e.grabado.tipo_display : '', 'Situación': e.mensaje || '',
             };
         });
         const libro = XLSX.utils.book_new();

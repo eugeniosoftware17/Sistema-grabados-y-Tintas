@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static estaticos %}
 
 {% block title %}K1 Pendientes | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
-<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
-<link rel="stylesheet" href="{% static 'css/componentes/panel_grabado.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
 <style>
     /* Estilos propios de la tabla de K1 pendientes (ver views_grabados.py) */
     .k1-fila { cursor: pointer; }
@@ -109,6 +109,6 @@
     </div>
   </div>
 
-<script src="{% static 'js/componentes/panel_grabado.js' %}"></script>
-<script src="{% static 'js/k1_pendientes.js' %}"></script>
+<script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/k1_pendientes.js' %}"></script>
 {% endblock %}
