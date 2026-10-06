@@ -1,0 +1,168 @@
+/* ============================================================
+   Estilos de las pantallas Alta de Grabado y K1 Pendientes.
+   Se cargan DESPUÉS de grabados_tabla.css y solo ajustan lo propio
+   de estas dos pantallas (encabezado de página y formulario responsivo).
+
+   Puntos de quiebre:
+     > 1024px      computadora: campos en 3 columnas
+     601 - 1024px  tableta: 2 columnas
+     <= 600px      celular: 1 columna, botones a todo el ancho
+   ============================================================ */
+
+/* ---------- Encabezado de página (título + descripción corta) ---------- */
+.pagina-encabezado {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-bottom: 20px;
+}
+
+.pagina-titulo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    color: #1e5d2b;
+}
+
+.pagina-titulo svg {
+    width: 26px;
+    height: 26px;
+    stroke: var(--color-verde-principal);
+    fill: none;
+    flex-shrink: 0;
+}
+
+.pagina-descripcion {
+    margin: 6px 0 0;
+    font-size: 14px;
+    color: #5a6b60;
+    line-height: 1.4;
+}
+
+/* Variante dentro de una tarjeta (K1 Pendientes: encabezado sobre la tabla). */
+.pagina-encabezado--en-tarjeta {
+    margin-bottom: 0;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--color-borde);
+}
+
+/* ---------- Página de alta: columna centrada ---------- */
+/* grabados_tabla.css fija body { height: 80vh; overflow: hidden } para que el
+   scroll quede dentro de las tablas; esta página no tiene tabla y necesita el
+   scroll normal de la página (base.html no permite ponerle una clase al body). */
+body:has(.alta-pagina) {
+    height: auto;
+    overflow-y: auto;
+}
+
+.alta-pagina {
+    width: 100%;
+    max-width: 980px;
+    margin: 0 auto;
+    padding-bottom: 30px;
+}
+
+.alta-pagina .dashboard-card {
+    width: 100%;
+    max-width: none;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+}
+
+/* ---------- Campos ---------- */
+.rejilla-campos {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0 16px;
+}
+
+.rejilla-campos--dos {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.campo-ancho-completo {
+    grid-column: 1 / -1;
+}
+
+.campo-grupo { margin-bottom: 16px; min-width: 0; }
+.campo-grupo label { display: block; margin-bottom: 6px; font-weight: 600; color: #444; font-size: 13px; }
+
+.control-entrada {
+    width: 100%;
+    max-width: 100%;
+    padding: 9px 11px;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    font-size: 14px;
+    transition: border-color 0.2s;
+}
+.control-entrada:focus { outline: none; border-color: #2d8a3e; box-shadow: 0 0 0 3px rgba(45,138,62,0.1); }
+.control-entrada[readonly] { background: #f5f5f5; color: #555; }
+.area-texto { resize: vertical; font-family: inherit; }
+
+.obligatorio { color: #d32f2f; }
+.separador { border: none; border-top: 1px solid #eee; margin: 6px 0 18px; }
+.titulo-seccion { font-size: 14px; font-weight: 700; color: #2d8a3e; margin: 0 0 12px; }
+
+/* ---------- Avisos ---------- */
+.aviso {
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    overflow-wrap: anywhere;
+}
+.aviso--ok { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; }
+.aviso--info { background: #e3f2fd; color: #1565c0; border: 1px solid #bbdefb; }
+.aviso--advertencia { background: #fff8e1; color: #8a6100; border: 1px solid #ffe082; font-weight: 600; }
+.aviso--error { background: #fdecea; color: #c0392b; border: 1px solid #f5c6c6; font-weight: 600; }
+
+/* ---------- Resumen de pérdida y baño ---------- */
+.resumen-bano {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+.resumen-bano__perdida { font-size: 13px; color: #666; }
+.resumen-bano__sugerido {
+    background: #e8f5e9;
+    padding: 8px 15px;
+    border-radius: 8px;
+    border: 1px solid #c8e6c9;
+    color: #1b5e20;
+    text-align: center;
+}
+.resumen-bano__sugerido small { display: block; font-size: 10px; opacity: 0.8; margin-bottom: 2px; }
+
+/* ---------- Tableta ---------- */
+@media (max-width: 1024px) {
+    .rejilla-campos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------- Celular ---------- */
+@media (max-width: 600px) {
+    .pagina-titulo { font-size: 19px; }
+    .pagina-titulo svg { width: 22px; height: 22px; }
+    .pagina-descripcion { font-size: 13px; }
+
+    .rejilla-campos,
+    .rejilla-campos--dos { grid-template-columns: minmax(0, 1fr); }
+
+    .alta-pagina .dashboard-cabecera { padding: 16px; }
+    .alta-pagina .dashboard-cuerpo { padding: 16px; }
+
+    .alta-pagina .dashboard-pie {
+        flex-direction: column-reverse;
+        padding: 12px 16px;
+    }
+    .alta-pagina .boton { width: 100%; justify-content: center; }
+
+    .resumen-bano__sugerido { width: 100%; }
+}

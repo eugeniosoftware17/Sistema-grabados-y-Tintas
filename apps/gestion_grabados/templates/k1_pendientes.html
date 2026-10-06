@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}K1 Pendientes | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static 'css/componentes/panel_grabado.css' %}">
+<style>
+    /* Estilos propios de la tabla de K1 pendientes (ver views_grabados.py) */
+    .k1-fila { cursor: pointer; }
+    .k1-fila:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    .k1-referencia { max-width: 260px; overflow-wrap: anywhere; }
+    .k1-acciones { display: flex; flex-wrap: wrap; gap: 5px; }
+    .k1-acciones .boton { padding: 5px 10px; font-size: 11px; }
+    .boton--aprobar { background: #2d8a3e; color: white; }
+    .boton--rechazar { background: #d32f2f; color: white; }
+    .boton--detalle { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; }
+    .k1-propio { font-size: 11px; color: #8a6100; background: #fff8e1; border: 1px solid #ffe082;
+                 border-radius: 6px; padding: 4px 8px; display: inline-block; max-width: 180px; }
+
+    /* Celular: cada fila es una tarjeta (la base está en grabados_tabla.css,
+       que usa el data-label de cada td); aquí se evita que el texto largo o
+       los botones empujen el ancho. */
+    @media (max-width: 600px) {
+        .tabla-registros tbody td { gap: 10px; text-align: right; min-width: 0; }
+        .tabla-registros tbody td > * { min-width: 0; }
+        .k1-referencia { max-width: none; }
+        .tabla-registros tbody td.k1-celda-acciones { display: block; text-align: left; }
+        .tabla-registros tbody td.k1-celda-acciones::before { display: block; margin-bottom: 6px; }
+        .k1-acciones .boton { flex: 1 1 auto; padding: 9px 10px; font-size: 13px; }
+        .k1-propio { max-width: none; display: block; }
+    }
+</style>
+{% endblock %}
+{% block content %}
+
+  <div class="tabla-contenedor">
+    <header class="pagina-encabezado pagina-encabezado--en-tarjeta">
+      <div>
+        <h1 class="pagina-titulo">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+          </svg>
+          K1 Pendientes
+        </h1>
+        <p class="pagina-descripcion">Pruebas K1 que esperan la decisión de un supervisor.</p>
+      </div>
+      <div class="tabla-cabecera__contador" id="k1-contador"></div>
+    </header>
+
+    <div class="tabla-area-datos">
+      <table class="tabla-registros">
+        <thead>
+          <tr>
+            <th>OF</th>
+            <th>Proceso</th>
+            <th>Cliente</th>
+            <th>Referencia</th>
+            <th>Máquina</th>
+            <th>Intento</th>
+            <th>Registrado por</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="k1-cuerpo">
+          <tr><td colspan="8" class="tabla-sin-resultados">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- MODAL DE RECHAZO -->
+  <div id="modal-rechazo" class="overlay-moderno" style="display:none;">
+    <div class="dashboard-card" style="max-width: 520px;">
+      <div class="dashboard-cabecera" style="background: #d32f2f;">
+        <h3>Rechazar K1</h3>
+        <p id="rechazo-subtitulo"></p>
+      </div>
+      <div class="dashboard-cuerpo">
+        <div class="campo-grupo">
+          <label for="rechazo-motivo">Motivo del rechazo (obligatorio):</label>
+          <textarea id="rechazo-motivo" class="control-entrada area-texto" rows="3"
+                    placeholder="Explica por qué no pasa el K1..."></textarea>
+        </div>
+      </div>
+      <div class="dashboard-pie">
+        <button type="button" class="boton boton--cancelar" onclick="cerrarModalRechazo()">Cancelar</button>
+        <button type="button" class="boton boton--rechazar" id="rechazo-btn-confirmar" onclick="confirmarRechazo()">Rechazar K1</button>
+      </div>
+    </div>
+  </div>
+
+<script src="{% static 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static 'js/k1_pendientes.js' %}"></script>
+{% endblock %}

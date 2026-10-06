@@ -1,0 +1,262 @@
+/* ============================================================
+   Componente: panel lateral con el reporte completo de un grabado.
+   Lo usa static/js/componentes/panel_grabado.js (window.PanelGrabado).
+   Independiente de la pantalla: todas las clases llevan el prefijo pg-.
+   ============================================================ */
+
+.pg-fondo {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    z-index: 2000;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+.pg-fondo--visible { opacity: 1; }
+
+.pg-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(640px, 92vw);
+    background: #f7faf8;
+    box-shadow: -8px 0 30px rgba(0, 0, 0, 0.18);
+    z-index: 2001;              /* debajo de los modales .overlay-moderno (3000) */
+    display: flex;
+    flex-direction: column;
+    transform: translateX(100%);
+    transition: transform 0.28s ease;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #2c3e35;
+}
+.pg-panel--abierto { transform: translateX(0); }
+
+/* display: flex de arriba anularía el atributo hidden. */
+.pg-panel[hidden],
+.pg-fondo[hidden] { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+    .pg-panel, .pg-fondo { transition: none; }
+}
+
+body.pg-bloqueo-scroll { overflow: hidden; }
+
+/* ---------- Cabecera ---------- */
+.pg-cabecera {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px 20px;
+    background: #2d8a3e;
+    color: #fff;
+    flex-shrink: 0;
+}
+.pg-cabecera__titulo { margin: 0; font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+.pg-cabecera__subtitulo { margin: 2px 0 0; font-size: 12px; opacity: 0.9; }
+.pg-cabecera__botones { display: flex; gap: 8px; flex-shrink: 0; }
+
+.pg-boton-cabecera {
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    background: transparent;
+    color: #fff;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+.pg-boton-cabecera:hover,
+.pg-boton-cabecera:focus-visible { background: rgba(255, 255, 255, 0.15); outline: none; }
+.pg-boton-cabecera--cerrar { font-size: 18px; line-height: 1; padding: 4px 10px; }
+
+/* ---------- Cuerpo ---------- */
+.pg-cuerpo {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 20px 24px;
+}
+
+.pg-estado-carga { padding: 40px 0; text-align: center; color: #7a9485; font-size: 14px; }
+.pg-estado-error { padding: 14px; border-radius: 8px; background: #fdecea; color: #c0392b; border: 1px solid #f5c6c6; }
+
+.pg-seccion {
+    background: #fff;
+    border: 1px solid #e4ede7;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 14px;
+}
+.pg-seccion__titulo {
+    margin: 0 0 12px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #2d8a3e;
+}
+.pg-vacio { margin: 0; font-size: 13px; color: #7a9485; }
+
+/* Cuadrícula etiqueta/valor */
+.pg-datos {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px 16px;
+    margin: 0;
+}
+.pg-datos--dos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pg-dato { min-width: 0; }
+.pg-dato--ancho { grid-column: 1 / -1; }
+.pg-dato dt {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: #7a9485;
+    margin-bottom: 3px;
+}
+.pg-dato dd { margin: 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.pg-unidad { font-weight: 400; color: #7a9485; font-size: 12px; margin-left: 2px; }
+
+/* Etiquetas de color */
+.pg-etiqueta {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.pg-etiqueta--EN_FABRICACION { background: #cfe2ff; color: #084298; }
+.pg-etiqueta--PENDIENTE_K1,
+.pg-etiqueta--PENDIENTE      { background: #fff3cd; color: #856404; }
+.pg-etiqueta--APROBADO       { background: #d1e7dd; color: #0a5c36; }
+.pg-etiqueta--EN_MAQUINA     { background: #ffe5cc; color: #8a4500; }
+.pg-etiqueta--REPETIR,
+.pg-etiqueta--RECHAZADO      { background: #f8d7da; color: #842029; }
+.pg-etiqueta--neutra         { background: #eef2ef; color: #4a5a50; }
+
+/* Listas de historial */
+.pg-lista { list-style: none; margin: 0; padding: 0; }
+.pg-item { padding: 10px 0; border-top: 1px solid #eef2ef; }
+.pg-item:first-child { border-top: none; padding-top: 0; }
+.pg-item__linea { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13.5px; }
+.pg-item__titulo { font-weight: 700; }
+.pg-item__meta { font-size: 12.5px; color: #5a6b60; margin-top: 3px; overflow-wrap: anywhere; }
+.pg-item__motivo {
+    margin-top: 6px;
+    font-size: 13px;
+    padding: 6px 10px;
+    border-left: 3px solid #d32f2f;
+    background: #fdf5f5;
+    overflow-wrap: anywhere;
+}
+
+.pg-detalles { margin-top: 8px; }
+.pg-detalles summary {
+    cursor: pointer;
+    font-size: 12.5px;
+    color: #2d8a3e;
+    font-weight: 600;
+}
+.pg-detalles[open] summary { margin-bottom: 10px; }
+
+/* ---------- Pie con acciones ---------- */
+.pg-pie {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 20px;
+    border-top: 1px solid #e4ede7;
+    background: #fff;
+    flex-shrink: 0;
+}
+.pg-pie:empty { display: none; }
+.pg-aviso-propio {
+    flex: 1 1 100%;
+    font-size: 13px;
+    color: #8a6100;
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+.pg-boton {
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    color: #fff;
+}
+.pg-boton:disabled { opacity: 0.6; cursor: wait; }
+.pg-boton--aprobar { background: #2d8a3e; }
+.pg-boton--rechazar { background: #d32f2f; }
+
+.pg-solo-impresion { display: none; }
+
+/* ---------- Tableta ---------- */
+@media (max-width: 900px) {
+    .pg-datos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ---------- Celular: pantalla completa ---------- */
+@media (max-width: 600px) {
+    .pg-panel { width: 100vw; }
+    .pg-cabecera { padding: 12px 14px; }
+    .pg-cuerpo { padding: 12px 12px 20px; }
+    .pg-seccion { padding: 12px; }
+    .pg-pie { padding: 12px 14px; }
+    .pg-pie .pg-boton { flex: 1 1 100%; }
+    .pg-boton-cabecera--imprimir { display: none; }   /* imprimir desde el celular no tiene sentido */
+}
+
+/* ---------- Impresión: solo el reporte ---------- */
+@media print {
+    /* font-size: 0 oculta también el texto suelto que quede directo en el body
+       (base.html deja el texto del bloque title fuera de <title>); el panel
+       recupera su tamaño abajo. */
+    body.pg-imprimiendo {
+        height: auto !important;
+        overflow: visible !important;
+        background: #fff !important;
+        font-size: 0 !important;
+    }
+    body.pg-imprimiendo > *:not(.pg-panel) { display: none !important; }
+
+    body.pg-imprimiendo .pg-panel {
+        position: static;
+        width: 100%;
+        transform: none;
+        box-shadow: none;
+        background: #fff;
+        color: #000;
+        display: block;
+        font-size: 14px;
+    }
+    body.pg-imprimiendo .pg-cabecera {
+        background: none;
+        color: #000;
+        padding: 0 0 8px;
+        border-bottom: 2px solid #000;
+        margin-bottom: 12px;
+    }
+    body.pg-imprimiendo .pg-cabecera__botones,
+    body.pg-imprimiendo .pg-pie,
+    body.pg-imprimiendo .pg-detalles summary { display: none; }
+    body.pg-imprimiendo .pg-cuerpo { overflow: visible; padding: 0; }
+    body.pg-imprimiendo .pg-seccion {
+        border: 1px solid #bbb;
+        border-radius: 0;
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    body.pg-imprimiendo .pg-seccion__titulo { color: #000; }
+    body.pg-imprimiendo .pg-etiqueta { border: 1px solid #000; background: none; color: #000; }
+    body.pg-imprimiendo .pg-solo-impresion { display: block; font-size: 11px; color: #444; margin-top: 12px; }
+
+    @page { margin: 14mm; }
+}

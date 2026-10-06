@@ -112,6 +112,18 @@
             class="sb-subitem {% if view_name == 'grabados:fabricacion' %}sb-subitem--active{% endif %}"
             >Fabricación</a
           >
+          <a
+            href="{% url 'grabados:alta_grabado' %}"
+            class="sb-subitem {% if view_name == 'grabados:alta_grabado' %}sb-subitem--active{% endif %}"
+            >Alta de Grabado</a
+          >
+          {% if perms.gestion_grabados.decidir_pruebak1 %}
+          <a
+            href="{% url 'grabados:k1_pendientes' %}"
+            class="sb-subitem {% if view_name == 'grabados:k1_pendientes' %}sb-subitem--active{% endif %}"
+            >K1 Pendientes</a
+          >
+          {% endif %}
         </div>
       </div>
 

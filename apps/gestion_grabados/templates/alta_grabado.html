@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Alta de Grabado | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static 'css/grabados_paginas.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="alta-pagina">
+
+  <header class="pagina-encabezado">
+    <div>
+      <h1 class="pagina-titulo">
+        <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/>
+        </svg>
+        Alta de Grabado
+      </h1>
+      <p class="pagina-descripcion">Registra la fabricación de un grabado nuevo o su refabricación.</p>
+    </div>
+  </header>
+
+  {% if not maquinas %}
+    <div class="aviso aviso--error" id="alta-aviso-sin-maquinas">
+      ⚠️ No hay máquinas activas registradas. Antes de dar de alta grabados hay que cargar las máquinas en
+      el catálogo desde el administrador (<a href="/crdadmin/gestion_grabados/maquina/">Máquinas</a>).
+    </div>
+  {% endif %}
+
+  <div class="dashboard-card">
+    <div class="dashboard-cabecera">
+      <h3>Buscar OF</h3>
+      <p>Escribe la OF de origen del grabado y presiona Enter</p>
+    </div>
+
+    <div class="dashboard-cuerpo">
+      <div class="rejilla-campos rejilla-campos--dos">
+        <div class="campo-grupo">
+          <label for="alta-of">Número de OF:</label>
+          <input type="text" id="alta-of" class="control-entrada" placeholder="Ej: 22741"
+                 autocomplete="off" inputmode="numeric" autofocus>
+        </div>
+        <div class="campo-grupo">
+          <label for="alta-proceso">Proceso:</label>
+          <select id="alta-proceso" class="control-entrada" disabled>
+            <option value="">— Selecciona el proceso —</option>
+            <option value="STAMPING">STAMPING</option>
+            <option value="EMBOSSING">EMBOSSING</option>
+          </select>
+        </div>
+      </div>
+
+      <div id="alta-aviso-externo" class="aviso" style="display:none;"></div>
+
+      <div id="alta-datos-grabado" class="rejilla-campos" style="display:none;">
+        <div class="campo-grupo">
+          <label for="alta-cliente">Cliente: <span class="obligatorio" id="alta-cliente-obl" style="display:none;">*</span></label>
+          <input type="text" id="alta-cliente" class="control-entrada" readonly>
+        </div>
+        <div class="campo-grupo">
+          <label for="alta-referencia">Referencia: <span class="obligatorio" id="alta-referencia-obl" style="display:none;">*</span></label>
+          <input type="text" id="alta-referencia" class="control-entrada" readonly>
+        </div>
+        <div class="campo-grupo">
+          <label for="alta-sobre">Sobre:</label>
+          <input type="text" id="alta-sobre" class="control-entrada" readonly>
+        </div>
+      </div>
+
+      <div id="alta-aviso-accion" class="aviso" style="display:none;"></div>
+      <button type="button" id="alta-btn-cargar-origen" class="boton boton--primario" style="display:none; margin-bottom: 16px;"></button>
+
+      <!-- FORMULARIO TÉCNICO (mismos campos que FabricacionGrabado) -->
+      <form id="alta-form-tecnico" style="display:none;" onsubmit="return false;">
+        <hr class="separador">
+        <p class="titulo-seccion">Datos técnicos de la fabricación</p>
+
+        <div class="rejilla-campos">
+          <div class="campo-grupo" id="alta-maquina-caja">
+            <label for="alta-maquina">Máquina del K1: <span class="obligatorio">*</span></label>
+            <select id="alta-maquina" class="control-entrada">
+              <option value="">— Selecciona la máquina —</option>
+              {% for maquina in maquinas %}
+                <option value="{{ maquina.id }}">{{ maquina.nombre }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-responsables">Responsables: <span class="obligatorio">*</span></label>
+            <input type="text" id="alta-responsables" class="control-entrada" placeholder="Nombre de los operarios">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-tiempo">Tiempo Real (Min):</label>
+            <input type="number" step="1" min="0" id="alta-tiempo" class="control-entrada" placeholder="0" inputmode="numeric">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-peso-i">Peso Inicial (g): <span class="obligatorio">*</span></label>
+            <input type="number" step="1" min="0" id="alta-peso-i" class="control-entrada" placeholder="0" inputmode="decimal">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-peso-f">Peso Final (g): <span class="obligatorio">*</span></label>
+            <input type="number" step="1" min="0" id="alta-peso-f" class="control-entrada" placeholder="0" inputmode="decimal">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-temp">Temperatura (ºC): <span class="obligatorio">*</span></label>
+            <input type="number" min="0" id="alta-temp" class="control-entrada" placeholder="Ej: 150" inputmode="decimal">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-rpm">RPM / Velocidad: <span class="obligatorio">*</span></label>
+            <input type="number" step="1" min="0" id="alta-rpm" class="control-entrada" placeholder="Ej: 800" inputmode="numeric">
+          </div>
+          <div class="campo-grupo">
+            <label for="alta-compensacion">Compensación / Ajustes (ml):</label>
+            <input type="number" step="1" min="0" id="alta-compensacion" class="control-entrada" placeholder="0" inputmode="numeric">
+          </div>
+
+          <div class="campo-ancho-completo">
+            <div class="resumen-bano">
+              <div class="resumen-bano__perdida">
+                Pérdida: <strong id="alta-perdida-msg" style="color: #d32f2f">0 g</strong>
+              </div>
+              <div class="resumen-bano__sugerido">
+                <small>Fórmula: Pérdida × 6.6</small>
+                Baño sugerido: <strong id="alta-bano-msg" style="font-size: 16px">0 ml</strong>
+              </div>
+            </div>
+            <div id="alta-bano-acumulado-caja" class="aviso aviso--info" style="text-align: center; font-size: 12px;">
+              Baño acumulado hasta ahora: <strong id="alta-bano-acumulado-msg">— / 2000 ml</strong>
+            </div>
+          </div>
+
+          <div class="campo-grupo campo-ancho-completo" id="alta-compensacion-motivo-caja" style="display: none">
+            <label for="alta-compensacion-motivo" style="color: #e67e22">¿Por qué cambiaste el valor recomendado? (Obligatorio):</label>
+            <textarea id="alta-compensacion-motivo" class="control-entrada area-texto" rows="2"
+                      placeholder="Explica el motivo del ajuste..."></textarea>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div class="dashboard-pie">
+      <button type="button" class="boton boton--cancelar" onclick="limpiarAlta()">Limpiar</button>
+      <button type="button" class="boton boton--guardar" id="alta-btn-guardar" style="display:none;" onclick="guardarAlta()">Guardar</button>
+    </div>
+  </div>
+
+</div>
+
+<script src="{% static 'js/alta_grabado.js' %}"></script>
+{% endblock %}
