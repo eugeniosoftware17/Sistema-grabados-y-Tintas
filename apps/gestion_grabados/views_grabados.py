@@ -15,11 +15,11 @@ from django.http import JsonResponse
 from django.shortcuts import render
 
 from . import selectors
-from .models import Maquina, PruebaK1
+from .models import Grabado, Maquina, PruebaK1
 from .services import grabados as servicio
 from .views import _normalizar_of, buscar_datos_externos
 
-PERMISO_DECIDIR_K1 = selectors.PERMISO_DECIDIR_K1
+PERMISO_DECIDIR_K1 = servicio.PERMISO_DECIDIR_K1
 
 
 def _error(mensaje, status=400):
@@ -171,7 +171,8 @@ def api_k1_pendientes(request):
             'intento': p.intento,
             'registrado_por': f.registrado_por.username if f.registrado_por else '—',
             'registrado_el': selectors.formatear_fecha(f.registrado_el),
-            'es_propio': request.user.pk in selectors.autores_de_k1(p),
+            'es_propio': servicio.es_autor_de_k1(request.user, p),
+            'puede_decidir': servicio.puede_decidir_k1(request.user, p),
         })
     return JsonResponse({'status': 'ok', 'data': datos})
 
@@ -222,3 +223,30 @@ def api_k1_aprobar(request, prueba_id):
 @_requiere_permiso_k1
 def api_k1_rechazar(request, prueba_id):
     return _decidir(request, prueba_id, aprobar=False)
+
+
+# ============================================================
+# INVENTARIO DE GRABADOS (consulta, cualquier usuario con sesión)
+# ============================================================
+
+@login_required
+def inventario_grabados(request):
+    return render(request, 'inventario_grabados.html', {
+        'estados': Grabado.ESTADO_CHOICES,
+    })
+
+
+@login_required
+def api_inventario(request):
+    """Conteos por estado y listado de grabados, con filtros opcionales
+    ?q=texto&proceso=STAMPING|EMBOSSING&estado=<estado>. Solo lectura."""
+    if request.method != 'GET':
+        return _error('Método no permitido', status=405)
+    q = request.GET.get('q', '').strip()
+    proceso = request.GET.get('proceso', '').strip().upper()
+    estado = request.GET.get('estado', '').strip().upper()
+    if proceso and proceso not in servicio.PROCESOS_VALIDOS:
+        return _error('Proceso inválido.')
+    if estado and estado not in selectors.ESTADOS_GRABADO:
+        return _error('Estado inválido.')
+    return JsonResponse({'status': 'ok', **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado)})

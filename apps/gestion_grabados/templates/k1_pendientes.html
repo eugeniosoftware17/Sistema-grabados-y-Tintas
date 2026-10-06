@@ -92,6 +92,23 @@
     </div>
   </div>
 
+<!-- AVISO: superusuario decidiendo sobre su propia fabricación -->
+  <div id="modal-aviso-propio" class="overlay-moderno" style="display:none;">
+    <div class="dashboard-card" style="max-width: 480px;" role="alertdialog" aria-modal="true"
+         aria-labelledby="aviso-propio-titulo" aria-describedby="aviso-propio-texto">
+      <div class="dashboard-cabecera" style="background: #b26a00;">
+        <h3 id="aviso-propio-titulo">Decisión sobre tu propia fabricación</h3>
+      </div>
+      <div class="dashboard-cuerpo">
+        <p id="aviso-propio-texto" style="margin: 0; font-size: 15px; line-height: 1.5;"></p>
+      </div>
+      <div class="dashboard-pie">
+        <button type="button" class="boton boton--cancelar" id="aviso-propio-cancelar">Cancelar</button>
+        <button type="button" class="boton boton--guardar" id="aviso-propio-confirmar">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
 <script src="{% static 'js/componentes/panel_grabado.js' %}"></script>
 <script src="{% static 'js/k1_pendientes.js' %}"></script>
 {% endblock %}

@@ -117,6 +117,11 @@
             class="sb-subitem {% if view_name == 'grabados:alta_grabado' %}sb-subitem--active{% endif %}"
             >Alta de Grabado</a
           >
+          <a
+            href="{% url 'grabados:inventario_grabados' %}"
+            class="sb-subitem {% if view_name == 'grabados:inventario_grabados' %}sb-subitem--active{% endif %}"
+            >Inventario de Grabados</a
+          >
           {% if perms.gestion_grabados.decidir_pruebak1 %}
           <a
             href="{% url 'grabados:k1_pendientes' %}"

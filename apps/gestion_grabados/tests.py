@@ -140,6 +140,27 @@ class RegistrarFabricacionTests(BaseGrabados):
         with self.assertRaises(servicio.TransicionInvalida):
             self.registrar(info=info)
 
+    def test_bloquea_si_la_of_no_tiene_el_proceso_en_el_sistema_externo(self):
+        # La OF existe y tiene EMBOSSING, pero se eligió STAMPING.
+        info = info_externa(of_embossing='22741')
+        evaluacion = servicio.evaluar_alta('22741', 'STAMPING', info, _normalizar_of)
+        self.assertEqual(evaluacion['accion'], servicio.ACCION_BLOQUEADA)
+        self.assertEqual(evaluacion['bloqueo'], servicio.BLOQUEO_SIN_PROCESO)
+        self.assertEqual(evaluacion['mensaje'],
+                         'Esta OF no tiene STAMPING en el sistema externo; revisa el proceso.')
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'no tiene STAMPING'):
+            self.registrar(info=info)
+        self.assertFalse(Grabado.objects.exists())
+        # Con el proceso correcto, sí.
+        self.assertEqual(self.registrar(proceso='EMBOSSING', info=info)['accion'], servicio.ACCION_ALTA)
+
+    def test_sin_proceso_no_bloquea_si_la_of_no_existe_o_no_tiene_ningun_proceso(self):
+        # OF no encontrada: alta manual como siempre.
+        self.registrar(of='22741', info=info_externa(encontrado=False),
+                       datos_manuales={'cliente': 'Cliente manual', 'referencia': 'Ref manual'})
+        # OF encontrada sin ningún proceso informado: no hay base para bloquear.
+        self.assertEqual(self.registrar(of='22742', info=info_externa())['accion'], servicio.ACCION_ALTA)
+
     def test_of_referencia_igual_a_la_propia_es_alta(self):
         resultado = self.registrar(info=info_externa(of_stamping='22741.0'))
         self.assertEqual(resultado['accion'], servicio.ACCION_ALTA)
@@ -262,17 +283,44 @@ class DecidirK1Tests(BaseGrabados):
             servicio.decidir_k1(prueba_id=self.prueba.id, usuario=self.admin,
                                 aprobar=False, motivo='Cambio de opinión')
 
-    def test_quien_registro_no_puede_decidir_aunque_sea_supervisor_o_superusuario(self):
-        for autor in (self.supervisor, self.admin):
-            with self.subTest(autor=autor.username):
-                prueba = self.registrar(of=f'3{autor.pk}000', usuario=autor)['prueba_k1']
-                with self.assertRaises(servicio.AutoDecisionProhibida):
-                    servicio.decidir_k1(prueba_id=prueba.id, usuario=autor, aprobar=True)
-                with self.assertRaises(servicio.AutoDecisionProhibida):
-                    servicio.decidir_k1(prueba_id=prueba.id, usuario=autor,
-                                        aprobar=False, motivo='Rechazo propio')
-                prueba.refresh_from_db()
-                self.assertEqual(prueba.resultado, 'PENDIENTE')
+    def test_supervisor_no_superusuario_no_decide_su_propia_fabricacion(self):
+        prueba = self.registrar(of='31000', usuario=self.supervisor)['prueba_k1']
+        self.assertFalse(servicio.puede_decidir_k1(self.supervisor, prueba))
+        with self.assertRaises(servicio.AutoDecisionProhibida):
+            servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor, aprobar=True)
+        with self.assertRaises(servicio.AutoDecisionProhibida):
+            servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor,
+                                aprobar=False, motivo='Rechazo propio')
+        prueba.refresh_from_db()
+        self.assertEqual(prueba.resultado, 'PENDIENTE')
+        self.assertIsNone(prueba.decidido_por)
+
+    def test_superusuario_aprueba_su_propia_fabricacion(self):
+        prueba = self.registrar(of='32000', usuario=self.admin)['prueba_k1']
+        self.assertTrue(servicio.puede_decidir_k1(self.admin, prueba))
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.admin, aprobar=True)
+        prueba.refresh_from_db()
+        self.assertEqual(prueba.resultado, 'APROBADO')
+        # Sin campo extra: la auto-decisión se deduce de decidido_por == registrado_por.
+        self.assertEqual(prueba.decidido_por, prueba.fabricacion.registrado_por)
+        self.assertTrue(servicio.es_auto_decision(prueba))
+        self.assertEqual(prueba.grabado.estado, 'APROBADO')
+
+    def test_superusuario_rechaza_su_propia_fabricacion(self):
+        prueba = self.registrar(of='33000', usuario=self.admin)['prueba_k1']
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.admin, aprobar=False, motivo='Rechazo propio')
+        prueba.refresh_from_db()
+        self.assertEqual(prueba.resultado, 'RECHAZADO')
+        self.assertTrue(servicio.es_auto_decision(prueba))
+        self.assertEqual(prueba.grabado.estado, 'EN_FABRICACION')
+
+    def test_decision_de_otro_no_es_auto_decision(self):
+        servicio.decidir_k1(prueba_id=self.prueba.id, usuario=self.admin, aprobar=True)
+        self.prueba.refresh_from_db()
+        self.assertFalse(servicio.es_auto_decision(self.prueba))
+
+    def test_sin_permiso_nadie_puede_decidir(self):
+        self.assertFalse(servicio.puede_decidir_k1(self.operario, self.prueba))
 
     def test_k1_inexistente(self):
         with self.assertRaisesMessage(servicio.ErrorGrabado, 'no existe'):
@@ -314,6 +362,9 @@ class VistasAltaTests(BaseGrabados):
         self.assertEqual(respuesta['externo']['proceso'], 'STAMPING')
         self.assertEqual(respuesta['externo']['cliente'], 'CLIENTE SA')
         self.assertEqual(respuesta['procesos']['STAMPING']['accion'], servicio.ACCION_ALTA)
+        # La OF solo tiene STAMPING en el sistema externo: EMBOSSING queda bloqueado.
+        self.assertEqual(respuesta['procesos']['EMBOSSING']['bloqueo'], servicio.BLOQUEO_SIN_PROCESO)
+        self.assertIn('no tiene EMBOSSING', respuesta['procesos']['EMBOSSING']['mensaje'])
         self.assertTrue(respuesta['hay_maquinas'])
 
     @mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa(cliente='—', referencia='—', sobre='—'))
@@ -409,16 +460,32 @@ class VistasK1Tests(BaseGrabados):
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(Grabado.objects.get().estado, 'EN_FABRICACION')
 
-    def test_auto_aprobacion_por_api_da_mensaje_claro(self):
-        propia = self.registrar(of='30000', usuario=self.admin)['prueba_k1']
-        self.client.force_login(self.admin)
+    def test_auto_aprobacion_de_supervisor_por_api_da_mensaje_claro(self):
+        propia = self.registrar(of='30000', usuario=self.supervisor)['prueba_k1']
+        self.client.force_login(self.supervisor)
         datos = {d['id']: d for d in self.client.get(reverse('grabados:api_k1_pendientes')).json()['data']}
         self.assertTrue(datos[propia.id]['es_propio'])
+        self.assertFalse(datos[propia.id]['puede_decidir'])
+        self.assertTrue(datos[self.prueba.id]['puede_decidir'])  # el de otro sí
 
         respuesta = self.client.post(reverse('grabados:api_k1_aprobar', args=[propia.id]),
                                      data='{}', content_type='application/json')
         self.assertEqual(respuesta.status_code, 403)
         self.assertIn('registraste tú', respuesta.json()['message'])
+
+    def test_superusuario_decide_su_propio_k1_por_api(self):
+        propia = self.registrar(of='30001', usuario=self.admin)['prueba_k1']
+        self.client.force_login(self.admin)
+        datos = {d['id']: d for d in self.client.get(reverse('grabados:api_k1_pendientes')).json()['data']}
+        self.assertTrue(datos[propia.id]['es_propio'])
+        self.assertTrue(datos[propia.id]['puede_decidir'])
+
+        respuesta = self.client.post(reverse('grabados:api_k1_rechazar', args=[propia.id]),
+                                     data=json.dumps({'motivo': 'Lo rechazo yo mismo'}),
+                                     content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        propia.refresh_from_db()
+        self.assertEqual((propia.resultado, propia.decidido_por), ('RECHAZADO', self.admin))
 
 
 # ============================================================
@@ -499,6 +566,18 @@ class DetalleGrabadoTests(BaseGrabados):
         self.assertTrue(k1['es_propio'])
         self.assertFalse(k1['puede_decidir'])
 
+    def test_superusuario_autor_puede_decidir_y_queda_como_auto_decision(self):
+        prueba = self.registrar(of='34000', usuario=self.admin)['prueba_k1']
+        self.client.force_login(self.admin)
+        url = reverse('grabados:api_grabado_detalle', args=[prueba.grabado_id])
+        k1 = self.client.get(url).json()['data']['k1_actual']
+        self.assertTrue(k1['es_propio'])
+        self.assertTrue(k1['puede_decidir'])
+
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.admin, aprobar=True)
+        intentos = self.client.get(url).json()['data']['pruebas_k1']
+        self.assertEqual((intentos[0]['resultado'], intentos[0]['auto_decision']), ('APROBADO', True))
+
     def test_historiales_de_fabricaciones_e_intentos(self):
         d = self.detalle(self.supervisor)
         self.assertEqual([(f['numero'], f['tipo']) for f in d['fabricaciones']],
@@ -510,6 +589,7 @@ class DetalleGrabadoTests(BaseGrabados):
         self.assertEqual([(p['intento'], p['resultado']) for p in intentos],
                          [(1, 'RECHAZADO'), (2, 'PENDIENTE')])
         self.assertEqual(intentos[0]['motivo_rechazo'], 'Relieve incompleto')
+        self.assertFalse(intentos[0]['auto_decision'])  # lo decidió otro supervisor
         self.assertEqual(intentos[0]['decidido_por'], 'supervisor')
         self.assertIsNotNone(intentos[0]['decidido_el'])
         self.assertIsNone(intentos[1]['decidido_por'])
@@ -532,3 +612,114 @@ class DetalleGrabadoTests(BaseGrabados):
         self.assertIsNone(d['k1_actual'])
         self.assertEqual(d['estado'], 'APROBADO')
         self.assertEqual(d['envios'], [])
+
+
+# ============================================================
+# INVENTARIO DE GRABADOS
+# ============================================================
+
+class InventarioGrabadosTests(BaseGrabados):
+
+    def setUp(self):
+        # 22741 STAMPING: K1 1 rechazado + K1 2 pendiente -> PENDIENTE_K1
+        primera = self.registrar(of='22741')
+        servicio.decidir_k1(prueba_id=primera['prueba_k1'].id, usuario=self.supervisor,
+                            aprobar=False, motivo='Relieve incompleto')
+        self.registrar(of='22741')
+        # 22800 EMBOSSING de otro cliente: K1 aprobado -> APROBADO, con usos y ubicación
+        otro = info_externa(cliente='MY FATHER CIGARS', referencia='FLOR DE LAS ANTILLAS', sobre='S-2')
+        aprobado = self.registrar(of='22800', proceso='EMBOSSING', info=otro)
+        servicio.decidir_k1(prueba_id=aprobado['prueba_k1'].id, usuario=self.supervisor, aprobar=True)
+        Grabado.objects.filter(of_origen='22800').update(usos_acumulados=4, ubicacion='Cajón B2')
+        # 22900 STAMPING sin K1 todavía decidido -> PENDIENTE_K1, intento 1
+        self.registrar(of='22900')
+        self.client.force_login(self.operario)   # usuario común, sin permiso de K1
+
+    def api(self, **params):
+        respuesta = self.client.get(reverse('grabados:api_inventario'), params)
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        return respuesta.json()
+
+    def ofs(self, respuesta):
+        return sorted(g['of_origen'] for g in respuesta['data'])
+
+    def test_requiere_login(self):
+        self.client.logout()
+        for nombre in ('inventario_grabados', 'api_inventario'):
+            with self.subTest(vista=nombre):
+                respuesta = self.client.get(reverse(f'grabados:{nombre}'))
+                self.assertEqual(respuesta.status_code, 302)
+                self.assertIn('login', respuesta['Location'])
+
+    def test_pagina_visible_para_cualquier_usuario_y_en_el_menu(self):
+        respuesta = self.client.get(reverse('grabados:inventario_grabados'))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'Inventario de Grabados')
+        self.assertContains(respuesta, reverse('grabados:inventario_grabados'))  # enlace del menú
+        for codigo, _ in Grabado.ESTADO_CHOICES:
+            self.assertContains(respuesta, f'data-estado="{codigo}"')
+
+    def test_conteos_por_estado(self):
+        res = self.api()
+        self.assertEqual(res['conteos'], {
+            'EN_FABRICACION': 0, 'PENDIENTE_K1': 2, 'APROBADO': 1, 'EN_MAQUINA': 0, 'REPETIR': 0,
+        })
+        self.assertEqual(res['total'], 3)
+
+    def test_columnas_de_la_fila(self):
+        filas = {g['of_origen']: g for g in self.api()['data']}
+        g = filas['22741']
+        self.assertEqual((g['proceso'], g['cliente'], g['referencia']), ('STAMPING', 'CLIENTE SA', 'ANILLA DORADA'))
+        self.assertEqual((g['estado'], g['estado_display']), ('PENDIENTE_K1', 'Pendiente de K1'))
+        self.assertEqual(g['intentos_k1'], 2)
+        self.assertEqual((g['ultimo_k1'], g['ultimo_k1_display']), ('PENDIENTE', 'Pendiente'))
+        self.assertRegex(g['creado_el'], r'^\d{2}/\d{2}/\d{4}$')
+
+        aprobado = filas['22800']
+        self.assertEqual((aprobado['intentos_k1'], aprobado['ultimo_k1']), (1, 'APROBADO'))
+        self.assertEqual((aprobado['usos_acumulados'], aprobado['ubicacion']), (4, 'Cajón B2'))
+        self.assertIn('id', aprobado)  # para abrir el panel de detalle
+
+    def test_grabado_sin_k1_muestra_cero_intentos(self):
+        Grabado.objects.create(of_origen='25000', proceso='STAMPING', cliente='X', estado='APROBADO',
+                               aprobado_legado=True)
+        fila = next(g for g in self.api()['data'] if g['of_origen'] == '25000')
+        self.assertEqual((fila['intentos_k1'], fila['ultimo_k1']), (0, None))
+
+    def test_filtro_por_estado_no_cambia_los_conteos(self):
+        res = self.api(estado='APROBADO')
+        self.assertEqual(self.ofs(res), ['22800'])
+        self.assertEqual(res['total'], 1)
+        self.assertEqual(res['conteos']['PENDIENTE_K1'], 2)  # las tarjetas siguen mostrando todo
+
+    def test_busqueda_por_of_cliente_y_referencia(self):
+        self.assertEqual(self.ofs(self.api(q='2290')), ['22900'])
+        self.assertEqual(self.ofs(self.api(q='father')), ['22800'])
+        self.assertEqual(self.ofs(self.api(q='antillas')), ['22800'])
+        self.assertEqual(self.ofs(self.api(q='cliente dorada')), ['22741', '22900'])  # todas las palabras
+        self.assertEqual(self.api(q='no-existe')['data'], [])
+
+    def test_filtro_por_proceso_afecta_conteos(self):
+        res = self.api(proceso='EMBOSSING')
+        self.assertEqual(self.ofs(res), ['22800'])
+        self.assertEqual(res['conteos']['PENDIENTE_K1'], 0)
+        self.assertEqual(res['conteos']['APROBADO'], 1)
+
+    def test_filtros_invalidos(self):
+        for params in ({'proceso': 'OTRO'}, {'estado': 'PENDIENTE'}):
+            with self.subTest(params=params):
+                respuesta = self.client.get(reverse('grabados:api_inventario'), params)
+                self.assertEqual(respuesta.status_code, 400)
+
+    def test_es_solo_lectura(self):
+        respuesta = self.client.post(reverse('grabados:api_inventario'), data='{}', content_type='application/json')
+        self.assertEqual(respuesta.status_code, 405)
+
+    def test_limite_de_filas(self):
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_INVENTARIO', 2):
+            res = self.api()
+        self.assertEqual(len(res['data']), 2)
+        self.assertEqual(res['total'], 3)
+
+    def test_orden_del_mas_nuevo_al_mas_viejo(self):
+        self.assertEqual([g['of_origen'] for g in self.api()['data']], ['22900', '22800', '22741'])

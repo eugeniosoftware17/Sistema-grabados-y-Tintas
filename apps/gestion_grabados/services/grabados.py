@@ -29,8 +29,10 @@ ACCION_BLOQUEADA = 'BLOQUEADA'
 BLOQUEO_ESTADO = 'ESTADO'
 BLOQUEO_HISTORIAL_LEGADO = 'HISTORIAL_LEGADO'
 BLOQUEO_NO_ES_ORIGEN = 'NO_ES_ORIGEN'
+BLOQUEO_SIN_PROCESO = 'SIN_PROCESO'
 
 LARGO_MINIMO_MOTIVO_RECHAZO = 5
+PERMISO_DECIDIR_K1 = 'gestion_grabados.decidir_pruebak1'
 
 
 class ErrorGrabado(Exception):
@@ -191,6 +193,20 @@ def evaluar_alta(of_origen, proceso, info_externa, normalizar_of, grabado=None, 
         return resultado
 
     origen_api = of_origen_externa(info_externa, proceso, normalizar_of)
+
+    # La OF existe en el sistema externo con el OTRO proceso pero no con este:
+    # casi seguro se eligió mal el proceso. Si no tiene ninguno de los dos
+    # (fila con los campos vacíos), no hay información para bloquear y se deja
+    # el alta como con una OF no encontrada.
+    otro_proceso = 'EMBOSSING' if proceso == 'STAMPING' else 'STAMPING'
+    if (origen_api is None
+            and of_origen_externa(info_externa, otro_proceso, normalizar_of) is not None):
+        resultado.update(
+            bloqueo=BLOQUEO_SIN_PROCESO,
+            mensaje=f'Esta OF no tiene {proceso} en el sistema externo; revisa el proceso.',
+        )
+        return resultado
+
     if origen_api and origen_api != of_origen:
         resultado.update(
             bloqueo=BLOQUEO_NO_ES_ORIGEN,
@@ -331,9 +347,33 @@ def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
             'prueba_k1': prueba, 'bano': bano}
 
 
+def es_autor_de_k1(usuario, prueba):
+    """True si `usuario` registró la fabricación probada o abrió el K1
+    (normalmente la misma persona)."""
+    return usuario.pk in {prueba.fabricacion.registrado_por_id, prueba.creado_por_id} - {None}
+
+
+def puede_decidir_k1(usuario, prueba):
+    """Regla completa para mostrar o permitir la decisión de un K1: tener el
+    permiso decidir_pruebak1 y no ser autor de la fabricación, salvo que sea
+    superusuario (los administradores sí pueden decidir sobre lo propio)."""
+    if not usuario.has_perm(PERMISO_DECIDIR_K1):
+        return False
+    return usuario.is_superuser or not es_autor_de_k1(usuario, prueba)
+
+
+def es_auto_decision(prueba):
+    """K1 ya decidido por la misma persona que registró la fabricación probada
+    (solo puede pasar con un superusuario). Se deduce de los datos, sin campo propio."""
+    return (prueba.decidido_por_id is not None
+            and prueba.decidido_por_id == prueba.fabricacion.registrado_por_id)
+
+
 def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
     """Aprueba o rechaza un K1 pendiente. Quien registró la fabricación probada
-    no puede decidir sobre su propio K1, aunque sea supervisor o superusuario."""
+    no puede decidir sobre su propio K1, salvo que sea superusuario; en ese caso
+    decidido_por queda igual a registrado_por y se ve como auto-aprobado/rechazado.
+    El permiso decidir_pruebak1 lo valida la vista."""
     motivo = _texto(motivo)
     if not aprobar and len(motivo) < LARGO_MINIMO_MOTIVO_RECHAZO:
         raise ErrorGrabado(f'El motivo del rechazo es obligatorio '
@@ -352,8 +392,7 @@ def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
         if grabado.estado != 'PENDIENTE_K1':
             raise TransicionInvalida(f'El grabado está en estado "{grabado.get_estado_display()}", '
                                      'no en "Pendiente de K1".')
-        autores = {prueba.fabricacion.registrado_por_id, prueba.creado_por_id} - {None}
-        if usuario.pk in autores:
+        if es_autor_de_k1(usuario, prueba) and not usuario.is_superuser:
             raise AutoDecisionProhibida('No puedes aprobar ni rechazar el K1 de una fabricación '
                                         'que registraste tú: tiene que decidirlo otro supervisor.')
 

@@ -41,4 +41,6 @@ urlpatterns = [
     path('api/k1/<int:prueba_id>/aprobar/', views_grabados.api_k1_aprobar, name='api_k1_aprobar'),
     path('api/k1/<int:prueba_id>/rechazar/', views_grabados.api_k1_rechazar, name='api_k1_rechazar'),
     path('api/grabado/<int:grabado_id>/detalle/', views_grabados.api_grabado_detalle, name='api_grabado_detalle'),
+    path('inventario/', views_grabados.inventario_grabados, name='inventario_grabados'),
+    path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
 ]

@@ -183,6 +183,7 @@ body.pg-bloqueo-scroll { overflow: hidden; }
     border-radius: 8px;
     padding: 8px 12px;
 }
+.pg-aviso-propio--info { color: #1565c0; background: #e3f2fd; border-color: #bbdefb; }
 .pg-boton {
     border: none;
     border-radius: 8px;

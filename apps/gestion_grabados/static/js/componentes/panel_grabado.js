@@ -16,7 +16,9 @@
 
    Los botones Aprobar/Rechazar solo aparecen si la pantalla pasa `acciones`
    y el servidor dice que el usuario puede decidir (k1_actual.puede_decidir);
-   la regla real se valida igual en el servidor al decidir.
+   la regla real se valida igual en el servidor al decidir. Si además
+   k1_actual.es_propio (superusuario sobre su propia fabricación), la pantalla
+   debe pedir confirmación antes de decidir: el callback recibe k1.es_propio.
    ============================================================ */
 
 (function () {
@@ -136,6 +138,12 @@
         return seccion('Historial de fabricaciones', `<ul class="pg-lista">${items}</ul>`);
     }
 
+    // Decidido por quien registró la fabricación (solo posible para superusuarios).
+    function textoResultado(p) {
+        if (!p.auto_decision) return p.resultado_display;
+        return p.resultado === 'APROBADO' ? 'Auto-aprobado' : 'Auto-rechazado';
+    }
+
     function htmlIntentosK1(d) {
         if (!d.pruebas_k1.length) {
             return seccion('Historial de intentos K1', '<p class="pg-vacio">Sin pruebas K1 registradas.</p>');
@@ -148,7 +156,7 @@
                 <li class="pg-item">
                     <div class="pg-item__linea">
                         <span class="pg-item__titulo">Intento ${escapar(p.intento)}</span>
-                        ${etiqueta(p.resultado, p.resultado_display)}
+                        ${etiqueta(p.resultado, textoResultado(p))}
                     </div>
                     <div class="pg-item__meta">Máquina ${escapar(p.maquina)} · fabricación n.º ${escapar(p.fabricacion_numero)}</div>
                     <div class="pg-item__meta">${decision}</div>
@@ -198,11 +206,17 @@
         const k1 = d.k1_actual;
         if (!acciones || !k1) return;
 
-        if (k1.es_propio) {
-            pie.innerHTML = '<div class="pg-aviso-propio">Registraste esta fabricación: el K1 lo tiene que decidir otro supervisor.</div>';
+        if (!k1.puede_decidir) {
+            if (k1.es_propio) {
+                pie.innerHTML = '<div class="pg-aviso-propio">Registraste esta fabricación: el K1 lo tiene que decidir otro supervisor.</div>';
+            }
             return;
         }
-        if (!k1.puede_decidir) return;
+        if (k1.es_propio) {
+            // Solo llega aquí un superusuario: puede decidir, pero se le avisa.
+            pie.innerHTML = '<div class="pg-aviso-propio pg-aviso-propio--info">Registraste esta fabricación. ' +
+                'Como administrador puedes decidirla; quedará registrado que la decisión fue tuya.</div>';
+        }
 
         const rechazar = document.createElement('button');
         rechazar.type = 'button';
