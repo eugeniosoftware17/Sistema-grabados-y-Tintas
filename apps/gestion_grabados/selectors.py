@@ -4,13 +4,16 @@ No escriben nada: arman diccionarios listos para JsonResponse, para que
 cualquier pantalla (K1 Pendientes, más adelante la consulta de grabados)
 reutilice el mismo formato.
 """
-from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery, Value
+from datetime import date
+
+from django.db.models import Case, Count, F, IntegerField, OuterRef, Prefetch, Q, Subquery, Value, When
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from .models import EnvioMaquina, FabricacionGrabado, Grabado, PruebaK1
+from .management.commands.auditar_grabados import normalizar_of, referencia_valida
+from .models import EnvioMaquina, FabricacionGrabado, Grabado, HistorialUbicacion, OrdenFabricacion, PruebaK1
 from .services.grabados import (
-    es_auto_decision, of_origen_externa, proceso_ausente_en_externo,
+    PROCESOS_VALIDOS, es_auto_decision, of_origen_externa, proceso_ausente_en_externo,
 )
 
 
@@ -87,6 +90,18 @@ def _envio(envio):
     }
 
 
+def _cambio_ubicacion(cambio):
+    return {
+        'id': cambio.id,
+        'anterior': cambio.ubicacion_anterior,
+        'nueva': cambio.ubicacion_nueva,
+        'origen': cambio.origen,
+        'origen_display': cambio.get_origen_display(),
+        'usuario': _usuario(cambio.usuario),
+        'cambiado_el': formatear_fecha(cambio.cambiado_el),
+    }
+
+
 def detalle_grabado(grabado_id):
     """Reporte completo de un grabado, o None si no existe.
     'k1_actual' es el K1 pendiente (si hay), con la fabricación que prueba."""
@@ -101,6 +116,9 @@ def detalle_grabado(grabado_id):
             Prefetch('envios',
                      queryset=EnvioMaquina.objects.select_related(
                          'maquina', 'enviado_por', 'recogido_por').order_by('-enviado_el')),
+            Prefetch('historial_ubicaciones',
+                     queryset=HistorialUbicacion.objects.select_related('usuario')
+                     .order_by('-cambiado_el', '-id')),
         )
         .filter(pk=grabado_id)
         .first()
@@ -136,7 +154,72 @@ def detalle_grabado(grabado_id):
         'fabricaciones': [_fabricacion(f) for f in grabado.fabricaciones.all()],
         'pruebas_k1': [_prueba(p) for p in pruebas],
         'envios': [_envio(e) for e in grabado.envios.all()],
+        'historial_ubicaciones': [_cambio_ubicacion(c) for c in grabado.historial_ubicaciones.all()],
     }
+
+
+# ============================================================
+# TABLA DE CONSULTAS (histórico): grabado de cada OrdenFabricacion
+# ============================================================
+
+ENLACE_LEGADO = 'LEGADO'    # LegadoOrden.grabado (lo deja migrar_a_grabados)
+ENLACE_ENVIO = 'ENVIO'      # la OF se tiró con el PLANI nuevo (EnvioMaquina)
+ENLACE_OF = 'OF'            # Grabado(of_origen = OF Referencia o la propia OF, proceso)
+
+MOTIVO_OF_INVALIDA = 'La OF o el proceso de esta fila no son válidos: no se puede enlazar con un grabado.'
+MOTIVO_SIN_MIGRAR = 'Fila sin migrar (SIN_MIGRAR) y sin grabado en EIS: la ubicación no se puede editar.'
+MOTIVO_SIN_GRABADO = ('Esta OF no tiene grabado en EIS (falta migrarla o crearlo): '
+                      'la ubicación no se puede editar.')
+
+
+def grabados_de_ordenes(ordenes):
+    """Resuelve el grabado de cada fila de OrdenFabricacion, en cascada:
+    1. LegadoOrden.grabado (si la fila ya se migró y quedó con grabado);
+    2. el último EnvioMaquina de esa OF con un grabado del mismo proceso;
+    3. Grabado(of_origen = OF Referencia válida o la propia OF, proceso), la
+       misma regla con la que migrar_a_grabados agrupa las filas.
+    `ordenes`: dicts con 'id', 'of', 'referencia', 'proceso' y 'legado_grabado'
+    (legado__grabado_id), 'legado_rol' (legado__rol). Devuelve
+    {orden_id: {'grabado': {...} | None, 'enlace': ..., 'motivo': ...}}.
+    Tres consultas en total, sin importar cuántas filas: los grabados y envíos
+    se leen enteros (sin IN con miles de parámetros, SQL Server admite 2100)."""
+    grabados = {g['id']: g for g in Grabado.objects.values('id', 'of_origen', 'proceso', 'ubicacion',
+                                                            'actualizado_el')}
+    por_origen = {(g['of_origen'], g['proceso']): g['id'] for g in grabados.values()}
+    por_envio = {}
+    for e in (EnvioMaquina.objects.order_by('-enviado_el', '-id')
+              .values('of', 'grabado_id', 'grabado__proceso')):
+        por_envio.setdefault((normalizar_of(e['of']), e['grabado__proceso']), e['grabado_id'])
+
+    resultado = {}
+    for o in ordenes:
+        of_norm = normalizar_of(o['of'])
+        proceso = (o['proceso'] or '').strip().upper()
+        grabado_id, enlace = o.get('legado_grabado'), ENLACE_LEGADO
+        if grabado_id is None and of_norm:
+            grabado_id, enlace = por_envio.get((of_norm, proceso)), ENLACE_ENVIO
+            if grabado_id is None:
+                origen = referencia_valida({'referencia': o['referencia'], 'of_norm': of_norm}) or of_norm
+                grabado_id, enlace = por_origen.get((origen, proceso)), ENLACE_OF
+
+        grabado = grabados.get(grabado_id)
+        if grabado is not None:
+            resultado[o['id']] = {'grabado': {
+                'id': grabado['id'],
+                'of_origen': grabado['of_origen'],
+                'proceso': grabado['proceso'],
+                'ubicacion': grabado['ubicacion'],
+                'actualizado_el': formatear_fecha(grabado['actualizado_el']),
+            }, 'enlace': enlace, 'motivo': None}
+        else:
+            if not of_norm or proceso not in PROCESOS_VALIDOS:
+                motivo = MOTIVO_OF_INVALIDA
+            elif o.get('legado_rol') == 'SIN_MIGRAR':
+                motivo = MOTIVO_SIN_MIGRAR
+            else:
+                motivo = MOTIVO_SIN_GRABADO
+            resultado[o['id']] = {'grabado': None, 'enlace': None, 'motivo': motivo}
+    return resultado
 
 
 # ============================================================
@@ -164,7 +247,8 @@ def inventario_grabados(q='', proceso='', estado='', tipo=''):
     """Grabados para la pantalla de Inventario.
     - 'conteos': grabados por estado, respetando búsqueda, proceso y tipo (no el
       filtro de estado, para que las tarjetas muestren el reparto completo).
-    - 'filas': hasta LIMITE_INVENTARIO grabados, del más nuevo al más viejo.
+    - 'filas': hasta LIMITE_INVENTARIO grabados, del modificado más reciente al
+      más viejo (Grabado.actualizado_el).
     - 'total': cuántos cumplen todos los filtros (puede superar el límite)."""
     base = _filtrar_busqueda(Grabado.objects.all(), q)
     if proceso:
@@ -188,9 +272,10 @@ def inventario_grabados(q='', proceso='', estado='', tipo=''):
     filas = (filtrados
              .annotate(intentos_k1=Coalesce(Subquery(intentos, output_field=IntegerField()), Value(0)),
                        ultimo_k1=Subquery(ultimo))
-             .order_by('-creado_el', '-id')
+             .order_by('-actualizado_el', '-id')
              .values('id', 'of_origen', 'proceso', 'cliente', 'referencia', 'estado', 'tipo',
-                     'intentos_k1', 'ultimo_k1', 'usos_acumulados', 'ubicacion', 'creado_el')
+                     'intentos_k1', 'ultimo_k1', 'usos_acumulados', 'ubicacion', 'creado_el',
+                     'actualizado_el')
              [:LIMITE_INVENTARIO])
 
     estados_display = dict(Grabado.ESTADO_CHOICES)
@@ -211,6 +296,7 @@ def inventario_grabados(q='', proceso='', estado='', tipo=''):
         'usos_acumulados': f['usos_acumulados'],
         'ubicacion': f['ubicacion'],
         'creado_el': timezone.localtime(f['creado_el']).strftime('%d/%m/%Y') if f['creado_el'] else None,
+        'actualizado_el': formatear_fecha(f['actualizado_el']),
     } for f in filas]
 
     return {'conteos': conteos, 'total': total, 'limite': LIMITE_INVENTARIO, 'data': datos}
@@ -330,3 +416,118 @@ def _estado_fila_plani(fila, clave, grabados, abierto_por_of, abierto_por_grabad
                 'completada': {'fecha': _fecha_corta(ultimo.recogido_el), 'ubicacion': ultimo.ubicacion},
                 'mensaje': f'Completada el {_fecha_corta(ultimo.recogido_el)}.'}
     return {'accion': PLANI_MANDAR, 'grabado': resumen, 'mensaje': 'Aprobado y disponible.'}
+
+
+# ---------------------------------------------------------------- Tabla de Consultas (Histórico)
+
+LIMITE_CONSULTA = 500
+
+# Columna de la Tabla de Consultas -> campo de OrdenFabricacion que se filtra.
+# 'ubicacion' es la que se muestra: la del grabado enlazado por LegadoOrden o, sin él,
+# la de la fila (los otros enlaces de grabados_de_ordenes no entran en el filtro).
+CAMPOS_CONSULTA = {
+    'of': 'of', 'ref': 'referencia', 'cliente': 'cliente', 'desc': 'descripcion',
+    'estado': 'estado', 'proceso': 'proceso', 'maquina': 'maquina', 'tipo': 'tipo_grabado',
+    'ubicacion': 'ubicacion_mostrada', 'sobre': 'sobre', 'cantidad': 'cantidad_formatos',
+    'horas': 'horas_proceso', 'responsables': 'responsables', 'peso_i': 'peso_inicial',
+    'peso_f': 'peso_final', 'perdida': 'perdida', 'temp': 'temp', 'rpm': 'rpm',
+    'tiempo_t': 'tiempo', 'comp': 'compensacion',
+}
+COLUMNAS_NUMERICAS_CONSULTA = {'cantidad', 'horas', 'peso_i', 'peso_f', 'perdida', 'temp', 'rpm'}
+CAMPOS_FECHA_CONSULTA = {'fecha': 'fecha_programada', 'fecha_reg': 'fecha_registro'}
+VACIO_CONSULTA = '—'  # lo que la pantalla muestra para null o ''
+# SQL Server admite como mucho 2100 parámetros por consulta.
+MAX_VALORES_FILTRO = 2000
+
+
+class FiltroConsultaInvalido(ValueError):
+    pass
+
+
+def _ordenes_base(q=''):
+    """OrdenFabricacion con la ubicación que muestra la tabla y la búsqueda `q`
+    (cada palabra en OF, OF Referencia, cliente, descripción, proceso, ubicación o estado)."""
+    queryset = OrdenFabricacion.objects.annotate(ubicacion_mostrada=Case(
+        When(legado__grabado__isnull=False, then=F('legado__grabado__ubicacion')),
+        default=F('ubicacion'),
+    ))
+    for palabra in (q or '').split():
+        queryset = queryset.filter(
+            Q(of__icontains=palabra) | Q(referencia__icontains=palabra) | Q(cliente__icontains=palabra)
+            | Q(descripcion__icontains=palabra) | Q(proceso__icontains=palabra) | Q(ubicacion__icontains=palabra)
+            | Q(legado__grabado__ubicacion__icontains=palabra) | Q(estado__icontains=palabra)
+        )
+    return queryset
+
+
+def _condicion_valores(columna, valores):
+    """Q de las filas cuyo valor mostrado en `columna` está en `valores` (textos de pantalla)."""
+    campo = CAMPOS_CONSULTA[columna]
+    condicion = Q(pk__in=[])
+    reales = [v for v in valores if v != VACIO_CONSULTA]
+    if VACIO_CONSULTA in valores:
+        condicion |= Q(**{f'{campo}__isnull': True})
+        if columna not in COLUMNAS_NUMERICAS_CONSULTA:
+            condicion |= Q(**{campo: ''})
+    if reales:
+        if columna in COLUMNAS_NUMERICAS_CONSULTA:
+            try:
+                reales = [float(v) for v in reales]
+            except ValueError:
+                raise FiltroConsultaInvalido(f'Valor no numérico en {columna}.')
+        condicion |= Q(**{f'{campo}__in': reales})
+    return condicion
+
+
+def _aplicar_filtros_consulta(queryset, filtros):
+    """`filtros` = lista de {'col': columna, 'in': [...]} | {'col', 'fuera': [...]} |
+    {'col', 'desde': 'aaaa-mm-dd', 'hasta': ...}; se cumplen todos (una columna puede
+    repetirse, ej. el filtro de Estado del panel y el de la columna)."""
+    if not isinstance(filtros or [], list):
+        raise FiltroConsultaInvalido('Filtros inválidos.')
+    for filtro in filtros or []:
+        if not isinstance(filtro, dict):
+            raise FiltroConsultaInvalido('Filtros inválidos.')
+        columna = filtro.get('col')
+        if not isinstance(columna, str):
+            raise FiltroConsultaInvalido('Filtros inválidos.')
+        if columna in CAMPOS_FECHA_CONSULTA:
+            campo = CAMPOS_FECHA_CONSULTA[columna]
+            try:
+                if filtro.get('desde'):
+                    queryset = queryset.filter(**{f'{campo}__gte': date.fromisoformat(filtro['desde'])})
+                if filtro.get('hasta'):
+                    queryset = queryset.filter(**{f'{campo}__lte': date.fromisoformat(filtro['hasta'])})
+            except (TypeError, ValueError):
+                raise FiltroConsultaInvalido(f'Fecha inválida en {columna}.')
+            continue
+        if columna not in CAMPOS_CONSULTA:
+            raise FiltroConsultaInvalido(f'Columna desconocida: {columna}.')
+        incluir, excluir = filtro.get('in'), filtro.get('fuera')
+        valores = incluir if incluir is not None else excluir
+        if not isinstance(valores, list) or not all(isinstance(v, str) for v in valores):
+            raise FiltroConsultaInvalido(f'Filtro inválido en {columna}.')
+        if len(valores) > MAX_VALORES_FILTRO:
+            raise FiltroConsultaInvalido('Demasiados valores marcados; usa la búsqueda para afinar.')
+        condicion = _condicion_valores(columna, valores)
+        queryset = queryset.filter(condicion) if incluir is not None else queryset.exclude(condicion)
+    return queryset
+
+
+def consulta_ordenes(q='', filtros=None):
+    """Filas de OrdenFabricacion para la Tabla de Consultas: búsqueda y filtros sobre
+    todo el historial, de la registrada más recientemente a la más vieja
+    (fecha_registro, luego id), con tope LIMITE_CONSULTA.
+    Devuelve {'total': cuántas cumplen, 'limite', 'ordenes': queryset recortado}."""
+    queryset = _aplicar_filtros_consulta(_ordenes_base(q), filtros)
+    total = queryset.count()
+    ordenes = queryset.order_by(F('fecha_registro').desc(nulls_last=True), '-id')[:LIMITE_CONSULTA]
+    return {'total': total, 'limite': LIMITE_CONSULTA, 'ordenes': ordenes}
+
+
+def valores_columna_consulta(columna, q=''):
+    """Valores distintos de una columna en todo el historial (respetando la búsqueda),
+    para la lista del filtro por columna. Sin orden: lo ordena la pantalla."""
+    if columna not in CAMPOS_CONSULTA:
+        raise FiltroConsultaInvalido(f'Columna desconocida: {columna}.')
+    return list(_ordenes_base(q).order_by().values_list(CAMPOS_CONSULTA[columna], flat=True).distinct())

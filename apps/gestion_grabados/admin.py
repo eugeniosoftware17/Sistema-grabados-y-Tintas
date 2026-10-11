@@ -2,6 +2,7 @@ from django.contrib import admin
 from .models import (
     OrdenFabricacion, EstadoBano,
     Maquina, Grabado, FabricacionGrabado, PruebaK1, EnvioMaquina, LegadoOrden,
+    HistorialUbicacion,
 )
 
 @admin.register(EstadoBano)
@@ -84,7 +85,8 @@ class GrabadoAdmin(admin.ModelAdmin):
                     'usos_acumulados', 'tipo', 'actualizado_el')
     list_filter = ('proceso', 'estado', 'tipo', 'datos_manuales')
     search_fields = ('of_origen', 'cliente', 'referencia', 'sobre')
-    readonly_fields = ('creado_por', 'creado_el', 'actualizado_el')
+    # La ubicación solo cambia por services.grabados.cambiar_ubicacion (con historial).
+    readonly_fields = ('ubicacion', 'creado_por', 'creado_el', 'actualizado_el')
     inlines = [FabricacionGrabadoInline, PruebaK1Inline, EnvioMaquinaInline]
 
 
@@ -112,6 +114,21 @@ class EnvioMaquinaAdmin(admin.ModelAdmin):
     list_filter = ('maquina', 'estado_fisico')
     search_fields = ('of', 'grabado__of_origen')
     list_select_related = ('grabado', 'maquina')
+
+
+@admin.register(HistorialUbicacion)
+class HistorialUbicacionAdmin(admin.ModelAdmin):
+    """Solo lectura: lo escribe services.grabados.cambiar_ubicacion."""
+    list_display = ('grabado', 'ubicacion_anterior', 'ubicacion_nueva', 'origen', 'usuario', 'cambiado_el')
+    list_filter = ('origen',)
+    search_fields = ('grabado__of_origen', 'ubicacion_anterior', 'ubicacion_nueva')
+    list_select_related = ('grabado', 'usuario')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(LegadoOrden)

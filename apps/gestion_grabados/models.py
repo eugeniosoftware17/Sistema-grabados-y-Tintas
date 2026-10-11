@@ -357,7 +357,11 @@ class Grabado(models.Model):
         constraints = [
             models.UniqueConstraint(fields=['of_origen', 'proceso'], name='grabado_unico_of_proceso'),
         ]
-        indexes = [models.Index(fields=['estado'], name='grabado_estado_idx')]
+        indexes = [
+            models.Index(fields=['estado'], name='grabado_estado_idx'),
+            # El Inventario ordena por última modificación.
+            models.Index(fields=['actualizado_el'], name='grabado_actualizado_idx'),
+        ]
 
     def __str__(self):
         return f"Grabado {self.of_origen} {self.proceso}"
@@ -514,6 +518,38 @@ class EnvioMaquina(models.Model):
 
     def __str__(self):
         return f"OF {self.of} con {self.grabado}"
+
+
+class HistorialUbicacion(models.Model):
+    """
+    Una fila por cada cambio de ubicación de un grabado. Solo la escribe
+    services.grabados.cambiar_ubicacion (edición en el Inventario o en la Tabla
+    de Consultas, o recogida desde el PLANI).
+    """
+    ORIGEN_CHOICES = [
+        ('INVENTARIO', 'Edición en el Inventario'),
+        ('CONSULTA', 'Edición en la Tabla de Consultas'),
+        ('RECOGIDA', 'Recogida desde el PLANI'),
+    ]
+
+    grabado = models.ForeignKey(Grabado, on_delete=models.CASCADE, related_name='historial_ubicaciones')
+    ubicacion_anterior = models.CharField(max_length=200, blank=True, null=True,
+                                          verbose_name="Ubicación anterior")
+    ubicacion_nueva = models.CharField(max_length=200, verbose_name="Ubicación nueva")
+    origen = models.CharField(max_length=20, choices=ORIGEN_CHOICES, verbose_name="Origen")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Usuario"
+    )
+    cambiado_el = models.DateTimeField(auto_now_add=True, verbose_name="Fecha del cambio")
+
+    class Meta:
+        verbose_name = "Cambio de ubicación"
+        verbose_name_plural = "Historial de ubicaciones"
+        ordering = ['-cambiado_el', '-id']
+
+    def __str__(self):
+        return f"{self.grabado}: {self.ubicacion_anterior or '—'} -> {self.ubicacion_nueva}"
 
 
 class LegadoOrden(models.Model):

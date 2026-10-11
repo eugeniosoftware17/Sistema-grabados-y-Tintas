@@ -402,7 +402,11 @@
             `OF ${fila.of} · grabado ${e.grabado.of_origen} · ${e.envio.maquina}`;
         $('recoger-aviso-terminada').style.display = e.terminada_en_planta ? 'block' : 'none';
         $('recoger-form').reset();
-        $('recoger-ubicacion').value = e.grabado.ubicacion || '';
+        // Solo se precarga si ya tiene el formato válido (ej. GBB-2-1); una ubicación
+        // vieja ("Cajón B2") deja el campo vacío para que la escriban bien.
+        const patron = new RegExp($('recoger-ubicacion').dataset.patron);
+        const actual = e.grabado.ubicacion || '';
+        $('recoger-ubicacion').value = patron.test(actual) ? actual : '';
         $('recoger-aviso').style.display = 'none';
         actualizarComentarioObligatorio();
         abrirModal('modal-recoger');

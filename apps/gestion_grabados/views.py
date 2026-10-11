@@ -12,7 +12,7 @@ from django.contrib.auth.decorators import login_required
 from . import selectors
 from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
-from django.db.models import Q
+from django.db.models import F, Q
 
 # La FileMaker Data API (CRDAPS10) usa un certificado autofirmado; se acepta el
 # mismo riesgo de MITM en LAN que ya asume la conexión a SQL Server (TrustServerCertificate=yes).
@@ -238,35 +238,28 @@ def plani_consulta(request):
     # Nombres normalizados de las máquinas activas: el JS avisa antes de mandar si
     # la máquina del Excel no está en el catálogo (el servidor lo valida igual).
     from .models import Maquina
-    from .services.grabados import normalizar_nombre_maquina
+    from .services.grabados import PATRON_UBICACION, normalizar_nombre_maquina
     maquinas = sorted({normalizar_nombre_maquina(m.nombre) for m in Maquina.objects.filter(activa=True)})
-    return render(request, 'plani_tabla.html', {'maquinas_activas': maquinas})
+    # El modal Recoger precarga la ubicación actual solo si ya cumple este formato.
+    return render(request, 'plani_tabla.html', {'maquinas_activas': maquinas,
+                                                'patron_ubicacion': PATRON_UBICACION.pattern})
 
-@login_required
-def api_obtener_registros(request):
-    queryset = OrdenFabricacion.objects.all()
-
-    q = request.GET.get('q', '').strip()
-    if q:
-        for palabra in q.split():
-            queryset = queryset.filter(
-                Q(of__icontains=palabra) |
-                Q(cliente__icontains=palabra) |
-                Q(descripcion__icontains=palabra) |
-                Q(proceso__icontains=palabra) |
-                Q(ubicacion__icontains=palabra) |
-                Q(estado__icontains=palabra)
-            )
-
+def _serializar_registros(queryset):
+    """Filas de OrdenFabricacion con los nombres que usan la Tabla de Consultas y las
+    Estadísticas, más el grabado enlazado a cada una."""
     registros = list(queryset.values(
-        'of', 'referencia', 'descripcion', 'cliente',
+        'id', 'of', 'referencia', 'descripcion', 'cliente',
         'tipo_grabado', 'proceso', 'maquina', 'estado',
         'fecha_programada', 'fecha_registro', 'ubicacion', 'sobre',
         'cantidad_formatos', 'horas_proceso',
         'responsables', 'peso_inicial', 'peso_final',
         'perdida', 'temp', 'rpm', 'tiempo', 'compensacion',
-        'usos_acumulados', 'foto_dano'
+        'usos_acumulados', 'foto_dano',
+        legado_grabado=F('legado__grabado_id'), legado_rol=F('legado__rol'),
     ))
+    # Grabado enlazado a cada fila (LegadoOrden -> EnvioMaquina -> OF de origen):
+    # con grabado, la ubicación que se muestra y se edita es la del grabado.
+    enlaces = selectors.grabados_de_ordenes(registros)
 
     for r in registros:
         r['ref']      = r.pop('referencia')
@@ -285,7 +278,62 @@ def api_obtener_registros(request):
         r['tiempo_t'] = r.pop('tiempo')
         r['comp']     = r.pop('compensacion')
 
-    return JsonResponse(registros, safe=False)
+        enlace = enlaces[r['id']]
+        r.pop('legado_grabado'); r.pop('legado_rol')
+        r['grabado'] = enlace['grabado']
+        r['enlace'] = enlace['enlace']
+        r['motivo_sin_grabado'] = enlace['motivo']
+        if enlace['grabado']:
+            r['ubicacion'] = enlace['grabado']['ubicacion']
+            r['grabado_mod'] = enlace['grabado']['actualizado_el']
+        else:
+            r['grabado_mod'] = None
+    return registros
+
+
+@login_required
+def api_obtener_registros(request):
+    """Todas las filas (sin tope): la usan las Estadísticas (Histórico)."""
+    queryset = OrdenFabricacion.objects.all()
+
+    q = request.GET.get('q', '').strip()
+    if q:
+        for palabra in q.split():
+            queryset = queryset.filter(
+                Q(of__icontains=palabra) |
+                Q(cliente__icontains=palabra) |
+                Q(descripcion__icontains=palabra) |
+                Q(proceso__icontains=palabra) |
+                Q(ubicacion__icontains=palabra) |
+                Q(legado__grabado__ubicacion__icontains=palabra) |
+                Q(estado__icontains=palabra)
+            )
+    return JsonResponse(_serializar_registros(queryset), safe=False)
+
+
+@login_required
+def api_consulta_registros(request):
+    """Tabla de Consultas: búsqueda (`q`) y filtros (`filtros`, JSON) sobre todo el
+    historial, las LIMITE_CONSULTA más recientes por fecha de registro."""
+    try:
+        filtros = json.loads(request.GET.get('filtros') or '[]')
+        resultado = selectors.consulta_ordenes(request.GET.get('q', '').strip(), filtros)
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': 'Filtros inválidos.'}, status=400)
+    except selectors.FiltroConsultaInvalido as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    return JsonResponse({'status': 'ok', 'total': resultado['total'], 'limite': resultado['limite'],
+                         'data': _serializar_registros(resultado['ordenes'])})
+
+
+@login_required
+def api_consulta_valores(request):
+    """Valores distintos de una columna (todo el historial) para su filtro."""
+    try:
+        valores = selectors.valores_columna_consulta(request.GET.get('col', ''), request.GET.get('q', '').strip())
+    except selectors.FiltroConsultaInvalido as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    return JsonResponse({'status': 'ok', 'valores': valores})
 
 @login_required
 def grabado_estadisticas(request):

@@ -12,8 +12,14 @@ Seguridad:
 - OrdenFabricacion no se modifica nunca.
 - Si la API externa no responde, se detiene antes de abrir la transacción.
 
-El reporte sale en pantalla y se guarda completo en
-reportes_migracion/migrar_a_grabados_<fecha>_<hora>.txt.
+El reporte se guarda completo en
+reportes_migracion/migrar_a_grabados_<fecha>_<hora>.txt; en pantalla sale el
+resumen, con cada lista recortada a los primeros --limite casos (10 por defecto).
+
+Ubicación: el grabado nuevo toma la de la fila más reciente (actualizado_el, id)
+que tenga ubicación, en mayúsculas y sin espacios sobrantes (sin validar el formato). Si la columna
+máquina trae una ubicación (ej. 'GBB-1-3'), no se crea esa máquina: el envío va a
+"SIN MÁQUINA (LEGADO)" y, si la fila no tenía ubicación, se usa ese valor.
 
 Uso:
     python manage.py migrar_a_grabados                 # simulación
@@ -37,7 +43,8 @@ from apps.gestion_grabados.models import (
     EnvioMaquina, FabricacionGrabado, Grabado, LegadoOrden, Maquina, OrdenFabricacion,
 )
 from apps.gestion_grabados.services.grabados import (
-    PROCESOS_VALIDOS, calcular_bano_ml, datos_externos_utiles, normalizar_nombre_maquina,
+    PATRON_UBICACION, PROCESOS_VALIDOS, ErrorGrabado, calcular_bano_ml, datos_externos_utiles,
+    normalizar_nombre_maquina, validar_ubicacion,
 )
 
 # Estado del grabado según el estado de la fila legada más reciente (regla 3).
@@ -56,8 +63,6 @@ PREFIJOS_EVENTO = ('FALLO:', 'Físico:')
 CAMPOS_PESO = ('peso_inicial', 'peso_final', 'perdida')
 FECHA_CORTE_PESOS = date(2026, 8, 12)
 MAQUINA_SIN_NOMBRE = 'SIN MÁQUINA (LEGADO)'
-# Nombres que todavía no se sabe a qué máquina corresponden: se listan sus filas.
-MAQUINAS_POR_REVISAR = ('GBB-1-3',)
 # SQL Server admite como mucho 2100 parámetros por consulta.
 TAMANO_LOTE_API = 500
 
@@ -82,6 +87,23 @@ def consultar_externos(ofs, proceso):
         for g_orden, fila in buscar(of_ints[i:i + TAMANO_LOTE_API]).items():
             resultado[str(int(g_orden))] = _procesar_fila_externa(fila, proceso)
     return resultado
+
+
+def normalizar_ubicacion(valor):
+    """Mayúsculas y sin espacios sobrantes (al inicio/final y repetidos). No valida
+    el formato ni cambia nada más: 'Gbb-2-1 ' -> 'GBB-2-1', 'Cajón  B2' -> 'CAJÓN B2'."""
+    return ' '.join((valor or '').split()).upper()
+
+
+def ubicacion_en_maquina(nombre):
+    """Si el nombre de máquina es en realidad una ubicación (LETRAS-número-número,
+    ej. 'GBB-1-3'), la devuelve normalizada; si no, ''."""
+    if not (nombre or '').strip():
+        return ''
+    try:
+        return validar_ubicacion(nombre)
+    except ErrorGrabado:
+        return ''
 
 
 def es_evento(texto):
@@ -144,7 +166,7 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument('--aplicar', action='store_true',
                             help='Guardar los cambios. Sin esta opción es una simulación.')
-        parser.add_argument('--limite', type=int, default=20,
+        parser.add_argument('--limite', type=int, default=10,
                             help='Máximo de casos por lista en pantalla (0 = todos). '
                                  'El archivo del reporte siempre lleva las listas completas.')
         parser.add_argument('--salida', default=None,
@@ -188,6 +210,7 @@ class Command(BaseCommand):
                 self.migrar()
                 self.seccion_repeticiones()
                 self.seccion_conflictos()
+                self.seccion_ubicaciones()
                 self.seccion_conteos_finales()
                 if not self.aplicar:
                     transaction.set_rollback(True)
@@ -210,8 +233,23 @@ class Command(BaseCommand):
         self.ya_migradas = self.total_ordenes - len(self.filas)
 
         self.grupos = defaultdict(list)
+        self.ubicaciones_normalizadas = []   # filas cuya ubicación cambia al normalizarla
         self.sin_grupo = []          # OF sin dígitos o proceso inválido: SIN_MIGRAR sin grabado
         for f in self.filas:
+            f['ubicacion_original'] = f['ubicacion']
+            ubicacion = normalizar_ubicacion(f['ubicacion'])
+            if ubicacion != (f['ubicacion'] or ''):
+                self.ubicaciones_normalizadas.append((f, ubicacion))
+            f['ubicacion'] = ubicacion
+            # Nombre de máquina que es una ubicación: sin máquina, y ubicación si faltaba.
+            # Solo cambia esta copia en memoria; OrdenFabricacion no se toca.
+            f['maquina_ubicacion'] = ubicacion_en_maquina(f['maquina'])
+            f['ubicacion_desde_maquina'] = False
+            if f['maquina_ubicacion']:
+                f['maquina_original'], f['maquina'] = f['maquina'], None
+                if not f['ubicacion']:
+                    f['ubicacion'] = f['maquina_ubicacion']
+                    f['ubicacion_desde_maquina'] = True
             f['of_norm'] = normalizar_of(f['of'])
             f['ref_norm'] = referencia_valida(f)
             f['tecnicos'] = any(tiene_valor(f[c]) for c in CAMPOS_TECNICOS)
@@ -321,12 +359,14 @@ class Command(BaseCommand):
             for forma, nombres in sorted(por_forma.items())
         )
 
-        por_revisar = [f for f in self.filas
-                       if normalizar_nombre_maquina(f['maquina']) in MAQUINAS_POR_REVISAR]
-        self.r.conteo(f"Filas con máquina por identificar ({', '.join(MAQUINAS_POR_REVISAR)}; no se unifica)",
-                      len(por_revisar), alerta=True)
-        self.r.lista(f"id={f['id']} OF={f['of']} {f['proceso']} {f['estado']} máquina={f['maquina']!r}"
-                     for f in por_revisar)
+        ubicaciones = [f for f in self.filas if f['maquina_ubicacion']]
+        self.r.conteo(f'Máquinas que son una ubicación (no se crean; van a "{MAQUINA_SIN_NOMBRE}")',
+                      len(ubicaciones), alerta=True)
+        self.r.lista(
+            f"id={f['id']} OF={f['of']} {f['proceso']} {f['estado']} máquina={f['maquina_original']!r} -> "
+            + (f"se usa como ubicación de la fila: {f['maquina_ubicacion']!r}" if f['ubicacion_desde_maquina']
+               else f"la fila ya tenía ubicación {f['ubicacion']!r}, se deja esa")
+            for f in ubicaciones)
 
     def seccion_pesos(self):
         filas = [f for f in self.filas
@@ -350,6 +390,8 @@ class Command(BaseCommand):
         self.roles = Counter()
         self.grabados_nuevos = 0
         self.grabados_reutilizados = 0
+        self.ubicaciones = Counter()
+        self.ubicaciones_distintas = []
         # Los grabados que ya estaban no cambian de estado (los reutilizados solo suman usos).
         self.estados_previos = Counter(Grabado.objects.values_list('estado', flat=True))
         self.estados_nuevos = Counter()
@@ -413,6 +455,7 @@ class Command(BaseCommand):
             # creado_el es auto_now_add: se corrige a la fecha de la primera fila legada.
             Grabado.objects.filter(pk=grabado.pk).update(creado_el=migrables[0]['creado_el'])
             numero = 0
+            self.contar_ubicacion(clave, migrables, grabado.ubicacion)
 
         hay_inicial = False
         pendiente_repeticion = False
@@ -445,6 +488,25 @@ class Command(BaseCommand):
             else:
                 rol = 'USO'
             self.enlazar(f, rol, grabado, fabricacion, envio)
+
+    def contar_ubicacion(self, clave, filas, elegida):
+        """Estadística de la sección UBICACIÓN; lista los grupos con ubicaciones
+        distintas y cuál ganó (la de la fila más reciente que tenga una)."""
+        if not elegida:
+            self.ubicaciones['sin'] += 1
+            return
+        self.ubicaciones['con'] += 1
+        self.ubicaciones['nuevo' if PATRON_UBICACION.match(elegida) else 'viejo'] += 1
+        self.ubicaciones['desde_maquina'] += any(
+            f['ubicacion_desde_maquina'] and f['ubicacion'][:200] == elegida for f in filas)
+        distintas = {(f['ubicacion'] or '').strip()[:200] for f in filas} - {''}
+        if len(distintas) > 1:
+            ganadora = next(f for f in sorted(filas, key=lambda f: (f['actualizado_el'], f['id']), reverse=True)
+                            if (f['ubicacion'] or '').strip())
+            otras = ', '.join(repr(u) for u in sorted(distintas - {elegida}))
+            self.ubicaciones_distintas.append(
+                f"{clave[0]} {clave[1]}: queda {elegida!r} (fila id={ganadora['id']} OF={ganadora['of']}, "
+                f"{fecha_local(ganadora['actualizado_el']):%d/%m/%Y}); otras: {otras}")
 
     @staticmethod
     def ultimo_valor(filas, campo, largo, saltar_eventos=False):
@@ -541,8 +603,26 @@ class Command(BaseCommand):
         self.r.conteo('Conflictos', len(self.conflictos), alerta=True)
         self.r.lista(self.conflictos)
 
+    def seccion_ubicaciones(self):
+        self.r.titulo('8. UBICACIÓN DE LOS GRABADOS NUEVOS (la de la fila más reciente que tenga; '
+                      'en mayúsculas y sin espacios sobrantes, sin validar el formato)')
+        self.r.conteo('Filas con la ubicación normalizada (mayúsculas / espacios)',
+                      len(self.ubicaciones_normalizadas))
+        if self.ubicaciones_normalizadas:
+            f, nueva = self.ubicaciones_normalizadas[0]
+            self.r.linea(f"    ejemplo: {f['ubicacion_original']!r} -> {nueva!r} (fila id={f['id']} OF={f['of']})")
+        self.r.conteo('Con ubicación', self.ubicaciones['con'])
+        self.r.conteo('  con el formato nuevo (ej. GBB-2-1)', self.ubicaciones['nuevo'])
+        self.r.conteo('  con formato viejo (se deja hasta que la editen)', self.ubicaciones['viejo'], alerta=True)
+        self.r.conteo('  tomada de la columna máquina', self.ubicaciones['desde_maquina'])
+        self.r.conteo('Sin ubicación', self.ubicaciones['sin'], alerta=True)
+        self.r.conteo('Varias OF con ubicaciones distintas (gana la más reciente)',
+                      len(self.ubicaciones_distintas), alerta=True)
+        self.r.lista(self.ubicaciones_distintas)
+        self.r.linea('  Los grabados reutilizados conservan la ubicación que ya tenían en EIS.')
+
     def seccion_conteos_finales(self):
-        self.r.titulo('8. CONTEOS FINALES' + ('' if self.aplicar else ' (simulados)'))
+        self.r.titulo('9. CONTEOS FINALES' + ('' if self.aplicar else ' (simulados)'))
         self.r.conteo('Grabados nuevos', getattr(self, 'grabados_nuevos', 0))
         self.r.conteo('Grabados reutilizados', getattr(self, 'grabados_reutilizados', 0))
         maquinas_creadas = getattr(self, 'maquinas_creadas', [])

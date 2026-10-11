@@ -9,6 +9,7 @@ y con select_for_update sobre el grabado para que dos usuarios no pisen la
 misma transición a la vez.
 """
 import math
+import re
 from datetime import datetime
 
 from django.db import IntegrityError, transaction
@@ -16,7 +17,8 @@ from django.db.models import F, Max, Q
 from django.utils import timezone
 
 from ..models import (
-    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, Maquina, OrdenFabricacion, PruebaK1,
+    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialUbicacion, Maquina,
+    OrdenFabricacion, PruebaK1,
 )
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
@@ -518,13 +520,12 @@ def mandar_a_maquina(*, of, proceso, grabado_id, fila, usuario):
 def recoger_de_maquina(*, envio_id, of, estado_fisico, ubicacion, comentario, usuario):
     """Cierra el envío abierto de la OF. OK: suma un uso y el grabado vuelve a
     APROBADO. REPETIR: el grabado queda en REPETIR (comentario obligatorio).
-    En ambos casos se guarda la ubicación en el envío y en el grabado."""
+    En ambos casos se guarda la ubicación en el envío y en el grabado (validada
+    y con historial, vía cambiar_ubicacion)."""
     estado_fisico = _texto(estado_fisico).upper()
     if estado_fisico not in ESTADOS_FISICOS:
         raise ErrorGrabado('Selecciona el estado físico del grabado: OK o REPETIR.')
-    ubicacion = _texto(ubicacion)
-    if not ubicacion:
-        raise ErrorGrabado('Ingresa la ubicación física donde queda el grabado.')
+    ubicacion = validar_ubicacion(ubicacion)
     comentario = _texto(comentario)
     if estado_fisico == 'REPETIR' and len(comentario) < LARGO_MINIMO_COMENTARIO_REPETIR:
         raise ErrorGrabado(f'Para mandar el grabado a REPETIR explica el motivo en el comentario '
@@ -552,12 +553,65 @@ def recoger_de_maquina(*, envio_id, of, estado_fisico, ubicacion, comentario, us
         envio.ubicacion = ubicacion
         envio.save()
 
-        grabado.ubicacion = ubicacion
+        grabado.ubicacion = cambiar_ubicacion(grabado_id=grabado.id, ubicacion=ubicacion, usuario=usuario,
+                                              origen=ORIGEN_RECOGIDA).ubicacion
         if estado_fisico == 'OK':
             grabado.estado = 'APROBADO'
             grabado.usos_acumulados = F('usos_acumulados') + 1
         else:
             grabado.estado = 'REPETIR'
-        grabado.save(update_fields=['estado', 'ubicacion', 'usos_acumulados', 'actualizado_el'])
+        grabado.save(update_fields=['estado', 'usos_acumulados', 'actualizado_el'])
         grabado.refresh_from_db(fields=['usos_acumulados'])
     return envio
+
+
+# ---------------------------------------------------------------- ubicación
+# LETRAS(2-4)-número-número, ej. GBB-2-1. Solo se valida al cambiarla: las
+# ubicaciones viejas con otro formato ("Cajón B2") se quedan como están.
+PATRON_UBICACION = re.compile(r'^[A-Z]{2,4}-\d{1,3}-\d{1,3}$')
+EJEMPLO_UBICACION = 'GBB-2-1'
+ORIGEN_INVENTARIO = 'INVENTARIO'
+ORIGEN_CONSULTA = 'CONSULTA'
+ORIGEN_RECOGIDA = 'RECOGIDA'
+# Orígenes que puede pedir la edición manual (api_grabado_ubicacion); RECOGIDA
+# solo lo pone recoger_de_maquina.
+ORIGENES_EDICION = (ORIGEN_INVENTARIO, ORIGEN_CONSULTA)
+
+
+class GrabadoNoExiste(ErrorGrabado):
+    status = 404
+
+
+def validar_ubicacion(valor):
+    """Devuelve la ubicación en mayúsculas y sin espacios, o ErrorGrabado si
+    está vacía o no tiene el formato LETRAS-número-número."""
+    ubicacion = re.sub(r'\s+', '', _texto(valor)).upper()
+    if not ubicacion:
+        raise ErrorGrabado('Ingresa la ubicación física donde queda el grabado.')
+    if not PATRON_UBICACION.match(ubicacion):
+        raise ErrorGrabado(f'La ubicación "{ubicacion}" no es válida. Usa el formato '
+                           f'LETRAS-número-número (de 2 a 4 letras), por ejemplo {EJEMPLO_UBICACION}.')
+    return ubicacion
+
+
+def cambiar_ubicacion(*, grabado_id, ubicacion, usuario, origen=ORIGEN_INVENTARIO):
+    """Único camino para cambiar Grabado.ubicacion: valida el formato y, si la
+    ubicación cambia, la guarda y deja la fila en HistorialUbicacion. Si es la
+    misma, no escribe nada. Devuelve el grabado; `grabado.ubicacion_cambio`
+    dice si hubo cambio."""
+    ubicacion = validar_ubicacion(ubicacion)
+    with transaction.atomic():
+        try:
+            grabado = Grabado.objects.select_for_update().get(pk=grabado_id)
+        except (Grabado.DoesNotExist, ValueError, TypeError):
+            raise GrabadoNoExiste('El grabado no existe.')
+
+        grabado.ubicacion_cambio = grabado.ubicacion != ubicacion
+        if grabado.ubicacion_cambio:
+            HistorialUbicacion.objects.create(
+                grabado=grabado, ubicacion_anterior=grabado.ubicacion, ubicacion_nueva=ubicacion,
+                origen=origen, usuario=usuario,
+            )
+            grabado.ubicacion = ubicacion
+            grabado.save(update_fields=['ubicacion', 'actualizado_el'])
+    return grabado

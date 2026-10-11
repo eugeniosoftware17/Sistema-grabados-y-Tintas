@@ -1,14 +1,35 @@
 {% extends "base.html" %}
-{% load static %}
+{% load static estaticos %}
 
 {% block title %}Registro de Grabados (Histórico) | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
 <style>
     /* grabados_tabla.css pinta el título de blanco (pensado para fondo verde);
        aquí el fondo es blanco, así que sin esto el título no se ve. */
     .tabla-cabecera__titulo { color: #1e5d2b; font-size: 15px; }
+
+    /* Clic en la fila: panel de detalle (PanelGrabado). */
+    .consulta-fila { cursor: pointer; }
+    .consulta-fila:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    /* Ubicación del grabado: doble clic para editar. */
+    .consulta-ubicacion { cursor: text; white-space: nowrap; }
+    .consulta-ubicacion:hover { background: #f0f9f4; }
+    .consulta-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    .consulta-ubicacion--bloqueada { cursor: not-allowed; color: #7a9485; }
+    .consulta-ubicacion--bloqueada:hover { background: #fff8ec; }
+    .consulta-ubicacion__input { width: 110px; padding: 4px 6px; border: 1px solid #2d8a3e; border-radius: 6px;
+                                 font-size: 13px; font-family: inherit; text-transform: uppercase; }
+    .consulta-ubicacion__error { color: #d32f2f; font-size: 11px; margin-top: 3px; white-space: normal;
+                                 max-width: 240px; }
+    .consulta-ubicacion--bloqueada .consulta-ubicacion__error { color: #a35f00; white-space: nowrap; }
+    .consulta-ubicacion__error:empty { display: none; }
+    .consulta-modificado { white-space: nowrap; }
+    @media (max-width: 768px) {
+        .consulta-ubicacion__input { width: 130px; font-size: 16px; }   /* 16px: iOS no hace zoom al enfocar */
+    }
 </style>
 {% endblock %}
 
@@ -61,7 +82,7 @@
         <div class="filtros-panel" id="filtros-panel" style="display:none; position:absolute; top:100%; left:0; background:white; border:1px solid #ddd; border-radius:8px; padding:15px; box-shadow:0 10px 25px rgba(0,0,0,0.1); z-index:1000; min-width:200px;">
           <div style="margin-bottom:10px;">
             <label style="display:block; font-size:12px; font-weight:bold; margin-bottom:5px;">Estado:</label>
-            <select id="filtro-estado" class="control-entrada" onchange="window.aplicarFiltrosCombinados()" style="width:100%; padding:5px; font-size:12px;">
+            <select id="filtro-estado" class="control-entrada" onchange="window.recargarRegistros()" style="width:100%; padding:5px; font-size:12px;">
               <option value="">Todos los estados</option>
               <option value="PENDIENTE">Pendiente</option>
               <option value="EN_PROCESO">En Proceso</option>
@@ -73,7 +94,7 @@
           </div>
           <div style="margin-bottom:10px;">
             <label style="display:block; font-size:12px; font-weight:bold; margin-bottom:5px;">Proceso:</label>
-            <select id="filtro-proceso" class="control-entrada" onchange="window.aplicarFiltrosCombinados()" style="width:100%; padding:5px; font-size:12px;">
+            <select id="filtro-proceso" class="control-entrada" onchange="window.recargarRegistros()" style="width:100%; padding:5px; font-size:12px;">
               <option value="">Todos los procesos</option>
               <option value="STAMPING">Stamping</option>
               <option value="EMBOSSING">Embossing</option>
@@ -262,6 +283,7 @@
               </button>
               <span id="indicador-filtro-comp" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
             </th>
+            <th data-col="grabado_mod" title="Última modificación del grabado enlazado">Últ. modif. grabado <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></th>
             <th data-col="acciones">Acciones</th>
           </tr>
         </thead>
@@ -288,37 +310,6 @@
   window.USER_IS_ADMIN = {{ user.is_staff|yesno:"true,false" }};
 </script>
 
-<!-- MODAL DE HISTORIAL -->
-<div id="modal-historial" class="overlay-moderno" style="display:none;">
-    <div class="dashboard-card" style="max-width: 700px;">
-        <div class="dashboard-cabecera">
-            <h3>Historial de la Orden: <span id="historial-of"></span></h3>
-            <p>Registro completo de procesos y cambios</p>
-        </div>
-        <div class="dashboard-cuerpo" style="max-height: 400px; overflow-y: auto;">
-            <table class="tabla-registros">
-                <thead>
-                    <tr>
-                        <th>Fecha Cambio</th>
-                        <th>OF Ref.</th>
-                        <th>Proceso</th>
-                        <th>Estado</th>
-                        <th>Técnico (I/F/T/RPM)</th>
-                        <th>Usos</th>
-                        <th>Usuario</th>
-                        <th>Ubicación</th>
-                    </tr>
-                </thead>
-                <tbody id="historial-cuerpo">
-                    <!-- Se llena vía JS -->
-                </tbody>
-            </table>
-        </div>
-        <div class="dashboard-pie">
-            <button class="boton boton--cancelar" onclick="cerrarHistorial()">Cerrar</button>
-        </div>
-    </div>
-</div>
-
-<script src="{% static 'js/grabados_tabla.js' %}"></script>
+<script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/grabados_tabla.js' %}"></script>
 {% endblock %}

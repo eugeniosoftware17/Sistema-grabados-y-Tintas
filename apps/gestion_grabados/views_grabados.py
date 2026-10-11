@@ -247,6 +247,35 @@ def api_inventario(request):
                          **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado, tipo=tipo)})
 
 
+@login_required
+def api_grabado_ubicacion(request, grabado_id):
+    """Cambia la ubicación de un grabado desde el Inventario o la Tabla de
+    Consultas. JSON: {ubicacion, origen (INVENTARIO por defecto | CONSULTA)}.
+    El servicio valida el formato y deja el cambio en HistorialUbicacion."""
+    if request.method != 'POST':
+        return _error('Método no permitido', status=405)
+    data = _leer_json(request)
+    if data is None:
+        return _error('Datos inválidos.')
+    origen = str(data.get('origen') or servicio.ORIGEN_INVENTARIO).strip().upper()
+    if origen not in servicio.ORIGENES_EDICION:
+        return _error('Origen inválido.')
+    try:
+        grabado = servicio.cambiar_ubicacion(grabado_id=grabado_id, ubicacion=data.get('ubicacion'),
+                                             usuario=request.user, origen=origen)
+    except servicio.ErrorGrabado as e:
+        return _error(e.mensaje, status=e.status)
+    mensaje = (f'Ubicación de {grabado.of_origen} {grabado.proceso}: {grabado.ubicacion}.'
+               if grabado.ubicacion_cambio else 'La ubicación no cambió.')
+    return JsonResponse({
+        'status': 'ok',
+        'message': mensaje,
+        'cambio': grabado.ubicacion_cambio,
+        'ubicacion': grabado.ubicacion,
+        'actualizado_el': selectors.formatear_fecha(grabado.actualizado_el),
+    })
+
+
 # ============================================================
 # PLANI (fase 3): mandar a máquina y recoger
 # ============================================================

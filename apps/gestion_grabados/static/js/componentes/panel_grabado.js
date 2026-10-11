@@ -5,6 +5,8 @@
 
    Uso:
      PanelGrabado.abrir(grabadoId);                  // solo consulta
+     PanelGrabado.abrir(grabadoId, { orden });       // + datos de una fila de la Tabla de Consultas
+     PanelGrabado.abrirOrden(orden);                 // OF sin grabado: la fila + GET /grabados/api/historial/<of>/
      PanelGrabado.abrir(grabadoId, {                 // con botones de K1
          acciones: {
              onAprobar:  (k1, detalle) => { ... },
@@ -17,17 +19,22 @@
    Los botones Aprobar/Rechazar solo aparecen si la pantalla pasa `acciones`
    y el grabado tiene un K1 pendiente (k1_actual). Cualquier usuario del
    módulo puede decidir, incluso sobre una fabricación que registró él.
+
+   `orden` es una fila de OrdenFabricacion tal como la devuelve
+   /grabados/api/registros/ (of, ref, proceso, estado, cliente, desc, ...).
    ============================================================ */
 
 (function () {
     'use strict';
 
     const URL_DETALLE = (id) => `/grabados/api/grabado/${encodeURIComponent(id)}/detalle/`;
+    const URL_HISTORIAL_OF = (of) => `/grabados/api/historial/${encodeURIComponent(of)}/`;
 
     let fondo = null;
     let panel = null;
     let opcionesActuales = {};
     let grabadoActual = null;
+    let ordenActual = null;        // fila de la Tabla de Consultas (opcional)
     let pedidoActual = 0;          // descarta respuestas viejas si se abre otro grabado
     let focoAnterior = null;
     let temporizadorCierre = null;
@@ -196,13 +203,104 @@
         return seccion('Envíos a máquina y uso', resumen + `<ul class="pg-lista" style="margin-top:12px;">${items}</ul>`);
     }
 
+    function htmlHistorialUbicaciones(d) {
+        const cambios = d.historial_ubicaciones || [];
+        if (!cambios.length) {
+            return seccion('Historial de ubicaciones', '<p class="pg-vacio">Sin cambios de ubicación registrados.</p>');
+        }
+        const items = cambios.map(c => `
+            <li class="pg-item">
+                <div class="pg-item__linea">
+                    <span class="pg-item__titulo">${escapar(c.anterior)} → ${escapar(c.nueva)}</span>
+                    ${etiqueta('neutra', c.origen_display)}
+                </div>
+                <div class="pg-item__meta">${escapar(c.cambiado_el)} · por ${escapar(c.usuario)}</div>
+            </li>`).join('');
+        return seccion('Historial de ubicaciones', `<ul class="pg-lista">${items}</ul>`);
+    }
+
+    // ------------------------------------------- orden (Tabla de Consultas)
+    const TEXTO_ENLACE = {
+        LEGADO: 'Migrada a EIS (enlace guardado por la migración).',
+        ENVIO: 'Se tiró con este grabado desde el PLANI.',
+        OF: 'Grabado de su OF de origen (OF Referencia o la propia OF).',
+    };
+
+    function htmlOrden(o) {
+        const tecnicos = htmlTecnicos({
+            responsables: o.responsables, peso_inicial: o.peso_i, peso_final: o.peso_f,
+            perdida: o.perdida, temp: o.temp, rpm: o.rpm, tiempo: o.tiempo_t, compensacion: o.comp,
+        });
+        const enlace = o.grabado
+            ? dato('Enlace con el grabado', escapar(TEXTO_ENLACE[o.enlace] || o.enlace), true)
+            : dato('Grabado', `<span class="pg-aviso-orden">${escapar(o.motivo_sin_grabado)}</span>`, true);
+        return seccion(`Orden de fabricación ${o.of} (histórico)`, `
+            <dl class="pg-datos">
+                ${dato('OF', escapar(o.of))}
+                ${dato('OF Referencia', escapar(o.ref))}
+                ${dato('Proceso', escapar(o.proceso))}
+                ${dato('Estado (histórico)', etiqueta('neutra', o.estado || '—'))}
+                ${dato('Cliente', escapar(o.cliente), true)}
+                ${dato('Descripción', escapar(o.desc), true)}
+                ${dato('Fecha prog.', escapar(o.fecha))}
+                ${dato('Fecha registro', escapar(o.fecha_reg))}
+                ${dato('Máquina', escapar(o.maquina))}
+                ${dato('Tipo de grabado', escapar(o.tipo))}
+                ${dato('Sobre', escapar(o.sobre))}
+                ${dato('Cantidad', numero(o.cantidad))}
+                ${dato('Horas', numero(o.horas))}
+                ${dato('Usos (fila)', numero(o.usos_acumulados))}
+                ${o.grabado ? '' : dato('Ubicación (histórica)', escapar(o.ubicacion))}
+                ${enlace}
+            </dl>
+            <details class="pg-detalles">
+                <summary>Ver datos técnicos de la orden</summary>
+                ${tecnicos}
+            </details>`);
+    }
+
+    function htmlMovimientosOF(res) {
+        const fila = (h, rotulo) => `
+            <li class="pg-item">
+                <div class="pg-item__linea">
+                    <span class="pg-item__titulo">OF ${escapar(h.of)} · ${escapar(h.proceso)}</span>
+                    ${etiqueta('neutra', h.estado || '—')}
+                    ${rotulo ? etiqueta('neutra', rotulo) : ''}
+                </div>
+                <div class="pg-item__meta">${escapar(h.actualizado_el ? new Date(h.actualizado_el).toLocaleString('es-DO') : null)} · por ${escapar(h.usuario__username || 'Sistema')}</div>
+                <div class="pg-item__meta">Ubicación ${escapar(h.ubicacion)} · usos ${escapar(h.usos_acumulados || 0)}</div>
+            </li>`;
+        const principal = res.principal || [];
+        const referencia = res.referencia || [];
+        let html = principal.length
+            ? `<ul class="pg-lista">${principal.map(h => fila(h)).join('')}</ul>`
+            : '<p class="pg-vacio">Sin movimientos registrados.</p>';
+        if (res.ref_id) {
+            html += `<h4 class="pg-subtitulo">Movimientos de la referencia ${escapar(res.ref_id)}</h4>`;
+            html += referencia.length
+                ? `<ul class="pg-lista">${referencia.map(h => fila(h, 'Referencia')).join('')}</ul>`
+                : `<p class="pg-vacio">La referencia ${escapar(res.ref_id)} no tiene movimientos registrados.</p>`;
+        }
+        return seccion('Historial de la OF (sistema anterior)', html);
+    }
+
     // --------------------------------------------------------------- render
+    function renderizarOrden(o, res) {
+        panel.querySelector('.pg-cabecera__titulo').textContent = `OF ${o.of} · ${o.proceso || ''}`;
+        panel.querySelector('.pg-cabecera__subtitulo').textContent = o.cliente || '';
+        panel.querySelector('.pg-cuerpo').innerHTML =
+            htmlOrden(o) + htmlMovimientosOF(res) +
+            `<p class="pg-solo-impresion">Reporte generado el ${escapar(new Date().toLocaleString('es-DO'))}</p>`;
+        panel.querySelector('.pg-pie').innerHTML = '';
+    }
+
     function renderizar(d) {
         panel.querySelector('.pg-cabecera__titulo').textContent = `Grabado ${d.of_origen} · ${d.proceso}`;
         panel.querySelector('.pg-cabecera__subtitulo').textContent = d.cliente || '';
         panel.querySelector('.pg-cuerpo').innerHTML =
+            (ordenActual ? htmlOrden(ordenActual) : '') +
             htmlEncabezado(d) + htmlK1Actual(d) + htmlTecnicosActuales(d) +
-            htmlFabricaciones(d) + htmlIntentosK1(d) + htmlEnvios(d) +
+            htmlFabricaciones(d) + htmlIntentosK1(d) + htmlEnvios(d) + htmlHistorialUbicaciones(d) +
             `<p class="pg-solo-impresion">Reporte generado el ${escapar(new Date().toLocaleString('es-DO'))}</p>`;
         renderizarAcciones(d);
     }
@@ -243,6 +341,7 @@
     function cargar() {
         const pedido = ++pedidoActual;
         mostrarCarga();
+        if (grabadoActual === null) { cargarOrden(pedido); return; }
         fetch(URL_DETALLE(grabadoActual), { headers: { 'Accept': 'application/json' } })
             .then(r => r.json())
             .then(res => {
@@ -251,6 +350,13 @@
                 renderizar(res.data);
             })
             .catch(() => { if (pedido === pedidoActual) mostrarError('Error de conexión al cargar el grabado.'); });
+    }
+
+    function cargarOrden(pedido) {
+        fetch(URL_HISTORIAL_OF(ordenActual.of), { headers: { 'Accept': 'application/json' } })
+            .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+            .then(res => { if (pedido === pedidoActual) renderizarOrden(ordenActual, res); })
+            .catch(() => { if (pedido === pedidoActual) mostrarError('Error de conexión al cargar la orden.'); });
     }
 
     // ------------------------------------------------------------ estructura
@@ -307,10 +413,19 @@
 
     // -------------------------------------------------------------- pública
     function abrir(grabadoId, opciones) {
+        mostrar(grabadoId, opciones || {});
+    }
+
+    function abrirOrden(orden) {
+        mostrar(null, { orden });
+    }
+
+    function mostrar(grabadoId, opciones) {
         construir();
         clearTimeout(temporizadorCierre);
-        opcionesActuales = opciones || {};
+        opcionesActuales = opciones;
         grabadoActual = grabadoId;
+        ordenActual = opciones.orden || null;
         if (panel.hidden) focoAnterior = document.activeElement;
 
         fondo.hidden = false;
@@ -335,8 +450,8 @@
     }
 
     function recargar() {
-        if (panel && !panel.hidden && grabadoActual !== null) cargar();
+        if (panel && !panel.hidden && (grabadoActual !== null || ordenActual)) cargar();
     }
 
-    window.PanelGrabado = { abrir, cerrar, recargar };
+    window.PanelGrabado = { abrir, abrirOrden, cerrar, recargar };
 })();

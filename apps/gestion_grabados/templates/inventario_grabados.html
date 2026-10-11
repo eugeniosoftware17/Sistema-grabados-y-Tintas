@@ -53,6 +53,21 @@
     .inv-referencia { max-width: 260px; overflow-wrap: anywhere; }
     .inv-centrado { text-align: center; }
 
+    /* Ubicación editable con doble clic (ver inventario_grabados.js). */
+    .inv-ubicacion { cursor: text; white-space: nowrap; }
+    .inv-ubicacion:hover { background: #f0f9f4; }
+    .inv-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    .inv-ubicacion__input { width: 110px; padding: 4px 6px; border: 1px solid #2d8a3e; border-radius: 6px;
+                            font-size: 13px; font-family: inherit; text-transform: uppercase; }
+    .inv-ubicacion__error { color: #d32f2f; font-size: 11px; margin-top: 3px; white-space: normal; max-width: 220px; }
+    .inv-ubicacion__error:empty { display: none; }
+    .inv-modificado { white-space: nowrap; }
+    .inv-imprimir { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+                    border: 1px solid var(--color-borde); border-radius: 8px; background: #fff; color: #5a6b60;
+                    cursor: pointer; }
+    .inv-imprimir svg { width: 16px; height: 16px; fill: none; stroke: currentColor; }
+    .inv-imprimir:disabled { opacity: 0.45; cursor: not-allowed; }
+
     @media (max-width: 1024px) {
         .inv-tarjetas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     }
@@ -65,6 +80,8 @@
         .tabla-registros tbody td { gap: 10px; text-align: right; min-width: 0; overflow-wrap: anywhere; }
         .inv-referencia { max-width: none; }
         .inv-centrado { text-align: right; }
+        .inv-ubicacion__input { width: 130px; font-size: 16px; }   /* 16px: iOS no hace zoom al enfocar */
+        .inv-ubicacion__error { max-width: none; text-align: right; }
 
         /* En celular la página hace scroll completo (tarjetas + buscador + lista),
            en vez del alto fijo con scroll interno que usan las tablas en escritorio. */
@@ -138,12 +155,14 @@
             <th class="inv-centrado">Intentos K1</th>
             <th>Último K1</th>
             <th class="inv-centrado">Usos</th>
-            <th>Ubicación</th>
+            <th title="Doble clic en la celda para editar">Ubicación</th>
+            <th>Última modificación</th>
             <th>Fecha de creación</th>
+            <th class="inv-centrado">Etiqueta</th>
           </tr>
         </thead>
         <tbody id="inv-cuerpo">
-          <tr><td colspan="11" class="tabla-sin-resultados">Cargando...</td></tr>
+          <tr><td colspan="13" class="tabla-sin-resultados">Cargando...</td></tr>
         </tbody>
       </table>
     </div>

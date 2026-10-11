@@ -17,6 +17,8 @@ urlpatterns = [
 
     # Endpoints de API
     path('api/registros/', views.api_obtener_registros, name='api_registros'),
+    path('api/consulta/registros/', views.api_consulta_registros, name='api_consulta_registros'),
+    path('api/consulta/valores/', views.api_consulta_valores, name='api_consulta_valores'),
     path('api/kpis/', views.api_dashboard_kpis, name='api_kpis'),
     path('api/estadisticas/', views.api_estadisticas_detalladas, name='api_stats_detalladas'),
     path('api/sincronizar/', views.sincronizar_plani, name='api_sincronizar'),
@@ -46,6 +48,8 @@ urlpatterns = [
     path('api/plani/recoger/', views_grabados.api_plani_recoger, name='api_plani_recoger'),
     path('inventario/', views_grabados.inventario_grabados, name='inventario_grabados'),
     path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
+    path('api/grabado/<int:grabado_id>/ubicacion/', views_grabados.api_grabado_ubicacion,
+         name='api_grabado_ubicacion'),
 ]
 
 # Todas las rutas (páginas y APIs) exigen el permiso del módulo Grabados: sin él, 403.

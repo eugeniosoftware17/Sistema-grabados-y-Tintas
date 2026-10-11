@@ -96,6 +96,10 @@ body.pg-bloqueo-scroll { overflow: hidden; }
     color: #2d8a3e;
 }
 .pg-vacio { margin: 0; font-size: 13px; color: #7a9485; }
+.pg-subtitulo { margin: 14px 0 8px; font-size: 12px; font-weight: 700; color: #5a6b60; }
+/* OF de la Tabla de Consultas sin grabado enlazado */
+.pg-aviso-orden { display: block; padding: 6px 10px; border-left: 3px solid #f39c12; background: #fff8ec;
+                  font-size: 13px; overflow-wrap: anywhere; }
 
 /* Cuadrícula etiqueta/valor */
 .pg-datos {

@@ -1,4 +1,11 @@
 
+/* Tabla de Consultas (histórico de OrdenFabricacion).
+   - Clic (o Enter) en una fila: panel de detalle PanelGrabado. Si la OF tiene
+     grabado enlazado (api_registros: reg.grabado) se abre el grabado con los
+     datos de la orden; si no, solo la orden y su historial (api_historial).
+   - Doble clic (o Enter) en Ubicación: edita la ubicación DEL GRABADO con
+     api_grabado_ubicacion (origen CONSULTA, mismo servicio que el Inventario).
+     Sin grabado enlazado la celda no se edita y muestra el motivo. */
 (function() {
     'use strict';
     console.log("EIS: Script grabados_tabla.js cargado correctamente.");
@@ -32,19 +39,19 @@
         'proceso', 'maquina', 'tipo', 'ubicacion', 'sobre', 'cantidad',
         'horas', 'responsables', 'peso_i', 'peso_f', 'perdida', 'temp',
         'rpm', 'tiempo_t', 'comp'
-    ];
+    ];  // 'grabado_mod' se ordena pero no se filtra
     const COLUMNAS_NUMERICAS = ['cantidad', 'horas', 'peso_i', 'peso_f', 'perdida', 'temp', 'rpm', 'tiempo_t', 'comp'];
     const COLUMNAS_FECHA = ['fecha', 'fecha_reg'];
     let filtrosColumna    = {}; // { estado: Set(['PENDIENTE','COMPLETADO']), ... } — sin entrada = sin filtro
     let columnaFiltroAbierta = null;
 
-    // Configurar filtro de los últimos 3 meses por defecto
-    const fechaInicioDefault = new Date();
-    fechaInicioDefault.setMonth(fechaInicioDefault.getMonth() - 3);
-    fechaInicioDefault.setHours(0, 0, 0, 0);
+    let valoresColumna    = {}; // { cliente: ['A', 'B', ...] } — opciones del filtro, de todo el historial
+    let totalServidor     = 0;  // filas que cumplen búsqueda + filtros (puede pasar del tope de 500)
+    let consultaActual    = 0;  // descarta respuestas viejas si el usuario sigue filtrando
 
-    let fechaDesdeTs       = fechaInicioDefault.getTime(); 
-    let fechaHastaTs       = null; 
+    // Sin filtro de fecha por defecto: el botón Fecha solo filtra si el usuario lo usa.
+    let fechaDesdeTs       = null;
+    let fechaHastaTs       = null;
     let columnaOrden       = null;  
     let direccionOrden     = 'asc'; 
 
@@ -76,6 +83,7 @@
       rpm       : 'RPM',
       tiempo_t  : 'Tiempo T.',
       comp      : 'Compensación',
+      grabado_mod: 'Últ. modif. grabado',
       acciones  : 'Acciones'
     };
 
@@ -89,6 +97,7 @@
       'REPETIR'    : 'estado--cancelado'
     };
 
+    const SVG_CANDADO = `<svg viewBox="0 0 24 24" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`;
     const SVG_PIN = `<svg viewBox="0 0 24 24" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
 
     /* ============================================================
@@ -99,6 +108,18 @@
       if (!str || str === '—') return null;
       const partes = str.split('/');
       return partes.length === 3 ? new Date(partes[2], partes[1] - 1, partes[0]).getTime() : null;
+    }
+
+    // 'dd/mm/aaaa hh:mm' (Últ. modif. grabado)
+    function parsearFechaHora(str) {
+      const m = /^(\d{2})\/(\d{2})\/(\d{4}) (\d{2}):(\d{2})$/.exec(str || '');
+      return m ? new Date(m[3], m[2] - 1, m[1], m[4], m[5]).getTime() : null;
+    }
+
+    function escaparHtml(valor) {
+      const div = document.createElement('div');
+      div.textContent = valor === null || valor === undefined || valor === '' ? '—' : String(valor);
+      return div.innerHTML;
     }
 
     function resaltarTexto(texto, palabras) {
@@ -127,16 +148,57 @@
         });
     }
 
-    function cargarRegistros(query) {
-      const url = query ? `/grabados/api/registros/?q=${encodeURIComponent(query)}` : '/grabados/api/registros/';
-      return fetch(url)
+    // Filtros que se mandan al servidor (formato de selectors.consulta_ordenes): así la
+    // búsqueda y los filtros miran todo el historial, no solo las filas cargadas.
+    function filtrosParaServidor() {
+      const filtros = [];
+      const estado = document.getElementById('filtro-estado') ? document.getElementById('filtro-estado').value : '';
+      const proceso = document.getElementById('filtro-proceso') ? document.getElementById('filtro-proceso').value : '';
+      if (estado) filtros.push({ col: 'estado', in: [estado] });
+      if (proceso) filtros.push({ col: 'proceso', in: [proceso] });
+      if (fechaDesdeTs || fechaHastaTs) {
+        filtros.push({ col: 'fecha',
+                       desde: fechaDesdeTs ? formatearFechaInputLocal(fechaDesdeTs) : null,
+                       hasta: fechaHastaTs ? formatearFechaInputLocal(fechaHastaTs) : null });
+      }
+      for (const col of COLUMNAS_FILTRABLES) {
+        const filtro = filtrosColumna[col];
+        if (!filtro) continue;
+        if (COLUMNAS_FECHA.includes(col)) {
+          filtros.push({ col,
+                         desde: filtro.desde ? formatearFechaInputLocal(filtro.desde) : null,
+                         hasta: filtro.hasta ? formatearFechaInputLocal(filtro.hasta) : null });
+        } else {
+          // Se manda la lista más corta: los marcados o los desmarcados.
+          const marcados = Array.from(filtro);
+          const desmarcados = (valoresColumna[col] || []).filter(v => !filtro.has(v));
+          filtros.push(valoresColumna[col] && desmarcados.length < marcados.length
+            ? { col, fuera: desmarcados } : { col, in: marcados });
+        }
+      }
+      return filtros;
+    }
+
+    function cargarRegistros() {
+      const params = new URLSearchParams();
+      const texto = palabrasBusqueda.join(' ');
+      if (texto) params.set('q', texto);
+      const filtros = filtrosParaServidor();
+      if (filtros.length) params.set('filtros', JSON.stringify(filtros));
+      const consulta = ++consultaActual;
+      return fetch(`/grabados/api/consulta/registros/?${params}`)
         .then(res => res.json())
-        .then(data => {
-          DATOS_REGISTROS = data;
+        .then(res => {
+          if (consulta !== consultaActual) return;  // ya hay una consulta más nueva
+          if (res.status !== 'ok') throw new Error(res.message || 'No se pudieron cargar los registros.');
+          DATOS_REGISTROS = res.data;
+          totalServidor = res.total;
           aplicarFiltrosCombinados();
         })
         .catch(err => console.error("Error al cargar registros:", err));
     }
+    const recargarRegistros = debounce(cargarRegistros, 250);
+    window.recargarRegistros = recargarRegistros;
 
     function cargarDatosDesdeDB() {
       cargarKPIs();
@@ -174,6 +236,8 @@
           if (valB === null || valB === undefined || valB === '—') valB = '';
           if (columnaOrden === 'fecha' || columnaOrden === 'fecha_reg') {
             valA = parsearFecha(valA) || 0; valB = parsearFecha(valB) || 0;
+          } else if (columnaOrden === 'grabado_mod') {
+            valA = parsearFechaHora(valA) || 0; valB = parsearFechaHora(valB) || 0;
           } else if (['peso_i', 'peso_f', 'perdida', 'temp', 'rpm', 'cantidad', 'horas'].includes(columnaOrden)) {
             valA = parseFloat(valA) || 0; valB = parseFloat(valB) || 0;
           } else {
@@ -183,9 +247,7 @@
           if (valA > valB) return direccionOrden === 'asc' ? 1 : -1;
           return 0;
         });
-      } else {
-        filtrados.sort((a, b) => (parsearFecha(b.fecha) || 0) - (parsearFecha(a.fecha) || 0));
-      }
+      }  // sin orden elegido queda el del servidor: fecha de registro más reciente primero
 
       registrosFiltrados = filtrados;
       paginaActual = 1;
@@ -197,9 +259,8 @@
       renderizarPaginacion(registrosFiltrados.length);
       const info = document.getElementById('pie-info');
       if (info) {
-        const inicio = registrosFiltrados.length === 0 ? 0 : (paginaActual - 1) * REGISTROS_POR_PAGINA + 1;
-        const fin = Math.min(paginaActual * REGISTROS_POR_PAGINA, registrosFiltrados.length);
-        info.innerHTML = `Mostrando <strong>${inicio}–${fin}</strong> de <strong>${registrosFiltrados.length}</strong> registros`;
+        const aviso = totalServidor > DATOS_REGISTROS.length ? ' · afina la búsqueda o los filtros para ver otros' : '';
+        info.innerHTML = `Mostrando <strong>${registrosFiltrados.length}</strong> de <strong>${totalServidor}</strong> registros${aviso}`;
       }
     }
 
@@ -214,7 +275,7 @@
       if (!tbody) return;
       
       if (pagina.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="23" class="tabla-sin-resultados">No se encontraron registros.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="24" class="tabla-sin-resultados">No se encontraron registros.</td></tr>`;
         return;
       }
 
@@ -223,7 +284,7 @@
       tbody.innerHTML = pagina.map((reg, idx) => {
         const globalIdx = inicio + idx;
         let htmlAcciones = `<div class="fila-acciones">
-            <button class="boton-accion boton-accion--ver" onclick="window.verHistorial('${reg.of}')" title="Ver Historial">
+            <button class="boton-accion boton-accion--ver" onclick="window.abrirDetalleConsulta(${globalIdx})" title="Ver detalle">
                 <svg viewBox="0 0 24 24" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>`;
         if (isAdmin) {
@@ -238,8 +299,8 @@
         htmlAcciones += `</div>`;
 
         return `
-        <tr>
-          <td data-col="of"><a class="celda-of-enlace" href="javascript:void(0)" onclick="window.verHistorial('${reg.of}')">${resaltarTexto(reg.of, palabrasBusqueda)}</a></td>
+        <tr class="consulta-fila" tabindex="0" data-idx="${globalIdx}">
+          <td data-col="of"><span class="celda-of-enlace">${resaltarTexto(reg.of, palabrasBusqueda)}</span></td>
           <td data-col="ref"><span class="celda-of-referencia">${resaltarTexto(reg.ref, palabrasBusqueda)}</span></td>
           <td data-col="cliente"><span class="celda-cliente">${resaltarTexto(reg.cliente, palabrasBusqueda)}</span></td>
           <td data-col="desc"><span class="celda-descripcion" title="${reg.desc}">${resaltarTexto(reg.desc, palabrasBusqueda)}</span></td>
@@ -249,7 +310,7 @@
           <td data-col="proceso">${resaltarTexto(reg.proceso, palabrasBusqueda)}</td>
           <td data-col="maquina"><span class="celda-maquina">${resaltarTexto(reg.maquina, palabrasBusqueda)}</span></td>
           <td data-col="tipo">${resaltarTexto(reg.tipo, palabrasBusqueda)}</td>
-          <td data-col="ubicacion"><span class="celda-ubicacion">${SVG_PIN}${resaltarTexto(reg.ubicacion, palabrasBusqueda)}</span></td>
+          ${htmlCeldaUbicacion(reg)}
           <td data-col="sobre"><span class="celda-ubicacion">${SVG_PIN}${resaltarTexto(reg.sobre, palabrasBusqueda)}</span></td>
           <td data-col="cantidad">${resaltarTexto(reg.cantidad, palabrasBusqueda)}</td>
           <td data-col="horas">${resaltarTexto(reg.horas, palabrasBusqueda)}</td>
@@ -261,12 +322,24 @@
           <td data-col="rpm">${resaltarTexto(reg.rpm, palabrasBusqueda)}</td>
           <td data-col="tiempo_t">${resaltarTexto(reg.tiempo_t, palabrasBusqueda)}</td>
           <td data-col="comp">${resaltarTexto(reg.comp, palabrasBusqueda)}</td>
+          <td data-col="grabado_mod" class="consulta-modificado">${escaparHtml(reg.grabado_mod)}</td>
           <td data-col="acciones">${htmlAcciones}</td>
         </tr>
       `}).join('');
       
       // Aplicar visibilidad actual de columnas tras renderizar
       aplicarVisibilidadColumnas();
+    }
+
+    function htmlCeldaUbicacion(reg) {
+      if (reg.grabado) {
+        return `<td data-col="ubicacion" class="consulta-ubicacion" tabindex="0"
+                    title="Ubicación del grabado ${escaparHtml(reg.grabado.of_origen)} ${escaparHtml(reg.grabado.proceso)}. Doble clic para editarla">
+                  <span class="celda-ubicacion">${SVG_PIN}${resaltarTexto(reg.ubicacion, palabrasBusqueda)}</span></td>`;
+      }
+      return `<td data-col="ubicacion" class="consulta-ubicacion consulta-ubicacion--bloqueada" tabindex="0"
+                  title="${escaparHtml(reg.motivo_sin_grabado)}">
+                <span class="celda-ubicacion">${SVG_CANDADO}${resaltarTexto(reg.ubicacion, palabrasBusqueda)}</span></td>`;
     }
 
     function renderizarPaginacion(total) {
@@ -368,11 +441,24 @@
         return (v === null || v === undefined || v === '' || v === '—') ? '—' : String(v);
     }
 
+    // Opciones del filtro: valores de esa columna en todo el historial (respetando la búsqueda).
     function obtenerValoresUnicos(col) {
-        const set = new Set();
-        DATOS_REGISTROS.forEach(reg => set.add(normalizarValorColumna(reg[col])));
-        const valores = Array.from(set);
+        const params = new URLSearchParams({ col });
+        const texto = palabrasBusqueda.join(' ');
+        if (texto) params.set('q', texto);
+        return fetch(`/grabados/api/consulta/valores/?${params}`)
+            .then(res => res.json())
+            .then(res => {
+                if (res.status !== 'ok') throw new Error(res.message);
+                const valores = ordenarValores(col, Array.from(new Set(res.valores.map(normalizarValorColumna))));
+                // Un valor marcado que ya no sale (ej. cambió la búsqueda) se sigue mostrando.
+                if (filtrosColumna[col]) filtrosColumna[col].forEach(v => { if (!valores.includes(v)) valores.push(v); });
+                valoresColumna[col] = valores;
+                return valores;
+            });
+    }
 
+    function ordenarValores(col, valores) {
         if (COLUMNAS_NUMERICAS.includes(col)) {
             valores.sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
         } else {
@@ -434,35 +520,40 @@
             return;
         }
 
-        const valores = obtenerValoresUnicos(col);
-        const seleccion = filtrosColumna[col]; // Set o undefined (= todos)
-        const todosMarcados = !seleccion;
-
-        lista.innerHTML = `
-            <div class="filtro-columna-buscador" style="position:sticky; top:0; background:#fff; padding:6px 14px; border-bottom:1px solid var(--color-borde);">
-                <input type="text" id="filtro-columna-buscador-input" placeholder="Buscar valor..."
-                       style="width:100%; box-sizing:border-box; padding:5px 8px; border:1px solid var(--color-borde); border-radius:6px; font-size:12px;"
-                       oninput="window.filtrarValoresFiltroColumna(this.value)">
-            </div>
-            <div class="filtro-columna-opcion filtro-columna-opcion--todos">
-                <input type="checkbox" id="fcv-todos" ${todosMarcados ? 'checked' : ''} onchange="window.alternarTodosFiltroColumna(this.checked)">
-                <label for="fcv-todos"><strong>(Seleccionar todos)</strong></label>
-            </div>
-        ` + valores.map((v, i) => {
-            const checked = todosMarcados || seleccion.has(v);
-            return `<div class="filtro-columna-opcion fcv-fila" data-valor-texto="${v.toLowerCase().replace(/"/g, '&quot;')}">
-                <input type="checkbox" class="fcv-valor" id="fcv-${i}" value="${v.replace(/"/g, '&quot;')}" ${checked ? 'checked' : ''} onchange="window.actualizarFiltroColumna()">
-                <label for="fcv-${i}">${v}</label>
-            </div>`;
-        }).join('');
-
+        lista.innerHTML = '<div style="padding:12px 14px; font-size:12px; color:var(--color-texto-suave);">Cargando valores...</div>';
         const rect = btnEl.getBoundingClientRect();
         panel.style.top = `${rect.bottom + 4}px`;
         panel.style.left = `${Math.min(rect.left, window.innerWidth - 236)}px`;
         panel.style.display = 'block';
 
-        const buscadorInput = document.getElementById('filtro-columna-buscador-input');
-        if (buscadorInput) buscadorInput.focus();
+        obtenerValoresUnicos(col).then(valores => {
+            if (columnaFiltroAbierta !== col) return;  // el usuario ya cerró o cambió de columna
+            const seleccion = filtrosColumna[col]; // Set o undefined (= todos)
+            const todosMarcados = !seleccion;
+
+            lista.innerHTML = `
+                <div class="filtro-columna-buscador" style="position:sticky; top:0; background:#fff; padding:6px 14px; border-bottom:1px solid var(--color-borde);">
+                    <input type="text" id="filtro-columna-buscador-input" placeholder="Buscar valor..."
+                           style="width:100%; box-sizing:border-box; padding:5px 8px; border:1px solid var(--color-borde); border-radius:6px; font-size:12px;"
+                           oninput="window.filtrarValoresFiltroColumna(this.value)">
+                </div>
+                <div class="filtro-columna-opcion filtro-columna-opcion--todos">
+                    <input type="checkbox" id="fcv-todos" ${todosMarcados ? 'checked' : ''} onchange="window.alternarTodosFiltroColumna(this.checked)">
+                    <label for="fcv-todos"><strong>(Seleccionar todos)</strong></label>
+                </div>
+            ` + valores.map((v, i) => {
+                const checked = todosMarcados || seleccion.has(v);
+                return `<div class="filtro-columna-opcion fcv-fila" data-valor-texto="${v.toLowerCase().replace(/"/g, '&quot;')}">
+                    <input type="checkbox" class="fcv-valor" id="fcv-${i}" value="${v.replace(/"/g, '&quot;')}" ${checked ? 'checked' : ''} onchange="window.actualizarFiltroColumna()">
+                    <label for="fcv-${i}">${escaparHtml(v)}</label>
+                </div>`;
+            }).join('');
+
+            const buscadorInput = document.getElementById('filtro-columna-buscador-input');
+            if (buscadorInput) buscadorInput.focus();
+        }).catch(() => {
+            if (columnaFiltroAbierta === col) lista.innerHTML = '<div style="padding:12px 14px; font-size:12px;">No se pudieron cargar los valores. Inténtalo de nuevo.</div>';
+        });
     };
 
     window.actualizarFiltroColumnaFecha = function() {
@@ -477,7 +568,7 @@
         else filtrosColumna[col] = { desde, hasta };
 
         actualizarIconoFiltro(col);
-        aplicarFiltrosCombinados();
+        recargarRegistros();
     };
 
     window.filtrarValoresFiltroColumna = function(texto) {
@@ -509,7 +600,7 @@
         if (todos) todos.checked = marcados.length === checkboxes.length;
 
         actualizarIconoFiltro(col);
-        aplicarFiltrosCombinados();
+        recargarRegistros();
     };
 
     window.limpiarFiltroColumnaActual = function() {
@@ -528,83 +619,119 @@
             document.querySelectorAll('.fcv-fila').forEach(fila => fila.style.display = '');
         }
         actualizarIconoFiltro(col);
-        aplicarFiltrosCombinados();
+        recargarRegistros();
     };
 
     /* ============================================================
        7. FUNCIONES GLOBALES (Exportadas)
     ============================================================ */
 
-    window.verHistorial = function(of_num) {
-        console.log("EIS: Abriendo historial comparativo de OF:", of_num);
-        const modal = document.getElementById('modal-historial');
-        const spanOF = document.getElementById('historial-of');
-        const tbody = document.getElementById('historial-cuerpo');
-        
-        if (!modal || !spanOF || !tbody) return;
+    window.abrirDetalleConsulta = function(idx) {
+        const reg = registrosFiltrados[idx];
+        if (!reg) return;
+        if (reg.grabado) window.PanelGrabado.abrir(reg.grabado.id, { orden: reg });
+        else window.PanelGrabado.abrirOrden(reg);
+    };
 
-        spanOF.innerText = of_num;
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;">Cargando comparativa...</td></tr>';
-        modal.style.display = 'flex';
+    /* --- Editar ubicación del grabado (doble clic o Enter en la celda) --- */
+    function mostrarMotivoBloqueo(celda, reg) {
+        if (celda.querySelector('.consulta-ubicacion__error')) return;
+        const aviso = document.createElement('div');
+        aviso.className = 'consulta-ubicacion__error';
+        aviso.setAttribute('role', 'alert');
+        // Texto corto para no estirar la fila; el motivo completo queda en el tooltip (title).
+        aviso.textContent = 'Sin grabado en EIS';
+        aviso.title = reg.motivo_sin_grabado;
+        celda.appendChild(aviso);
+        setTimeout(() => aviso.remove(), 5000);
+    }
 
-        fetch(`/grabados/api/historial/${of_num}/`)
-            .then(res => res.json())
-            .then(res => {
-                const principal = res.principal || [];
-                const referencia = res.referencia || [];
-                const refId = res.ref_id;
+    function editarUbicacion(celda) {
+        if (celda.querySelector('input')) return;
+        const reg = registrosFiltrados[Number(celda.closest('.consulta-fila').dataset.idx)];
+        if (!reg) return;
+        if (!reg.grabado) { mostrarMotivoBloqueo(celda, reg); return; }
 
-                if (principal.length === 0 && referencia.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;">No hay registros encontrados.</td></tr>';
-                    return;
-                }
+        const grabado = reg.grabado;
+        const contenidoOriginal = celda.innerHTML;
+        celda.innerHTML = `<div>
+            <input type="text" class="consulta-ubicacion__input" maxlength="20" autocomplete="off"
+                   placeholder="Ej: GBB-2-1" aria-label="Nueva ubicación del grabado">
+            <div class="consulta-ubicacion__error" role="alert"></div></div>`;
+        const input = celda.querySelector('input');
+        input.value = grabado.ubicacion || '';
+        input.focus();
+        input.select();
 
-                let html = "";
+        let guardando = false;
+        const cerrar = () => { celda.innerHTML = contenidoOriginal; };
+        const mostrarError = (texto) => { celda.querySelector('.consulta-ubicacion__error').textContent = texto; };
 
-                const renderFila = (h, tipo) => {
-                    const colorTipo = tipo === 'Principal' ? '#2d8a3e' : '#e67e22';
-                    const datosTecnicos = `
-                        <div style="font-size:10px;">
-                            ${h.peso_inicial || '—'} / ${h.peso_final || '—'} g<br>
-                            ${h.temp || '—'}°C | ${h.rpm || '—'} RPM
-                        </div>
-                    `;
-                    return `
-                        <tr style="background-color: ${tipo === 'Principal' ? 'rgba(45,138,62,0.03)' : 'rgba(243,156,18,0.03)'};">
-                            <td>${new Date(h.actualizado_el).toLocaleString()}</td>
-                            <td style="font-weight:bold;"><span style="color:${colorTipo};">(${tipo})</span><br>${h.of}</td>
-                            <td><strong>${h.proceso}</strong></td>
-                            <td><span class="celda-estado ${CLASE_POR_ESTADO[h.estado] || ''}">${h.estado}</span></td>
-                            <td>${datosTecnicos}</td>
-                            <td style="text-align:center; font-weight:bold;">${h.usos_acumulados || 0}</td>
-                            <td style="color:#666;">👤 ${h.usuario__username || 'Sistema'}</td>
-                            <td>${h.ubicacion || '—'}</td>
-                        </tr>
-                    `;
-                };
-
-                // Renderizar Principal
-                principal.forEach(h => html += renderFila(h, 'Principal'));
-
-                // Renderizar Referencia
-                if (referencia.length > 0) {
-                    html += `<tr style="background: #f8f9fa;"><td colspan="8" style="text-align:center; font-weight:bold; font-size:11px; padding:10px; color:#666; border-top: 2px solid #ddd;">MOVIMIENTOS DE LA REFERENCIA: ${refId}</td></tr>`;
-                    referencia.forEach(h => html += renderFila(h, 'Referencia'));
-                } else if (refId) {
-                    html += `<tr style="background: #fff5f5;"><td colspan="8" style="text-align:center; color:#d32f2f; font-size:11px; padding:10px;">⚠️ La referencia ${refId} no tiene movimientos registrados aún.</td></tr>`;
-                }
-
-                tbody.innerHTML = html;
+        input.addEventListener('click', (e) => e.stopPropagation());
+        input.addEventListener('keydown', (e) => {
+            e.stopPropagation();   // Enter no abre el panel de detalle
+            if (e.key === 'Escape') { e.preventDefault(); cerrar(); celda.focus(); }
+            if (e.key !== 'Enter' || guardando) return;
+            e.preventDefault();
+            guardando = true;
+            input.disabled = true;
+            mostrarError('');
+            fetch(`/grabados/api/grabado/${grabado.id}/ubicacion/`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+                body: JSON.stringify({ ubicacion: input.value, origen: 'CONSULTA' }),
             })
-            .catch(err => {
-                tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:red;">Error de conexión.</td></tr>';
-                console.error(err);
-            });
-    };
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status !== 'ok') throw new Error(res.message || 'No se pudo guardar la ubicación.');
+                    // Varias OF pueden usar el mismo grabado: se actualizan todas sus filas.
+                    DATOS_REGISTROS.forEach(r => {
+                        if (r.grabado && r.grabado.id === grabado.id) {
+                            r.grabado.ubicacion = res.ubicacion;
+                            r.grabado.actualizado_el = res.actualizado_el;
+                            r.ubicacion = res.ubicacion;
+                            r.grabado_mod = res.actualizado_el;
+                        }
+                    });
+                    const idx = celda.closest('.consulta-fila').dataset.idx;
+                    renderizarFilas();
+                    const nueva = document.querySelector(`.consulta-fila[data-idx="${idx}"] .consulta-ubicacion`);
+                    if (nueva) nueva.focus();
+                })
+                .catch(err => {
+                    guardando = false;
+                    input.disabled = false;
+                    input.focus();
+                    mostrarError(err.message === 'Failed to fetch' ? 'Error de conexión. Inténtalo de nuevo.' : err.message);
+                });
+        });
+        // Salir sin Enter cancela (mientras no se esté guardando).
+        input.addEventListener('blur', () => { if (!guardando) cerrar(); });
+    }
 
-    window.cerrarHistorial = function() {
-        document.getElementById('modal-historial').style.display = 'none';
-    };
+    const cuerpoTabla = document.getElementById('tabla-cuerpo');
+    if (cuerpoTabla) {
+        cuerpoTabla.addEventListener('click', (e) => {
+            // La ubicación (doble clic = editar) y los botones de acción no abren el panel.
+            if (e.target.closest('.consulta-ubicacion, .fila-acciones')) return;
+            const fila = e.target.closest('.consulta-fila');
+            if (fila) window.abrirDetalleConsulta(Number(fila.dataset.idx));
+        });
+        cuerpoTabla.addEventListener('dblclick', (e) => {
+            const celda = e.target.closest('.consulta-ubicacion');
+            if (celda) editarUbicacion(celda);
+        });
+        cuerpoTabla.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.target.classList.contains('consulta-fila')) {
+                e.preventDefault();
+                window.abrirDetalleConsulta(Number(e.target.dataset.idx));
+            } else if (e.target.classList.contains('consulta-ubicacion')) {
+                e.preventDefault();
+                editarUbicacion(e.target);
+            }
+        });
+    }
 
     /* --- Cierre de paneles desplegables (clic afuera / exclusión mutua) --- */
     const PANELES_DESPLEGABLES = [
@@ -642,7 +769,7 @@
     window.limpiarTodosLosFiltros = function() {
         const e = document.getElementById('filtro-estado'), p = document.getElementById('filtro-proceso');
         if (e) e.value = ''; if (p) p.value = '';
-        aplicarFiltrosCombinados();
+        recargarRegistros();
     };
 
     window.irAPagina = function(n) { paginaActual = n; actualizarUI(); };
@@ -687,8 +814,8 @@
         
         const etiqueta = document.getElementById('etiqueta-fecha');
         if (etiqueta) etiqueta.innerText = (d || h) ? 'Filtrado' : 'Fecha';
-        
-        aplicarFiltrosCombinados();
+
+        recargarRegistros();
     };
 
     window.limpiarFechas = function() {
@@ -718,13 +845,6 @@
        8. INICIALIZACIÓN
     ============================================================ */
     
-    // Inicializar input de fecha con el valor por defecto (3 meses atrás)
-    const inputDesde = document.getElementById('fecha-desde');
-    if (inputDesde) {
-        inputDesde.value = fechaInicioDefault.toISOString().split('T')[0];
-        const etiqueta = document.getElementById('etiqueta-fecha');
-        if (etiqueta) etiqueta.innerText = 'Filtrado';
-    }
     document.querySelectorAll('#tabla-registros thead th').forEach(th => {
         const col = th.dataset.col;
         if (col && col !== 'acciones') {
@@ -742,7 +862,7 @@
         buscador.addEventListener('input', debounce(e => {
             const texto = e.target.value.trim();
             palabrasBusqueda = texto.toLowerCase().split(/\s+/).filter(p => p);
-            cargarRegistros(texto);
+            cargarRegistros();
         }, 300));
     }
 
