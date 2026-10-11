@@ -23,14 +23,19 @@ from django.core.management.base import CommandError
 from django.db.models import F
 from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.gestion_grabados import selectors
 from apps.gestion_grabados.models import (
     EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion,
-    LegadoOrden, Maquina, OrdenFabricacion, PruebaK1,
+    HistorialActivacionSobre, HistorialUbicacionSobre, LegadoOrden, Maquina, OrdenFabricacion, PruebaK1,
+    Sobre,
 )
 from apps.gestion_grabados.services import grabados as servicio
+from apps.gestion_grabados.services import sobres as servicio_sobres
 from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
+
+RUTA_JS = Path(__file__).parent / 'static' / 'js'
 
 GRUPO_GRABADOS = 'Grabados'
 RUTA_BUSCAR_EXTERNOS = 'apps.gestion_grabados.views_grabados.buscar_datos_externos'
@@ -74,7 +79,7 @@ class BaseGrabados(TestCase):
         cls.admin = User.objects.create_superuser('admin', password='x')
 
     def registrar(self, of='22741', proceso='STAMPING', info=None, usuario=None,
-                  maquina_id=None, datos_manuales=None, tipo='K1', **cambios_tecnicos):
+                  maquina_id=None, datos_manuales=None, tipo='K1', ubicacion_sobre=None, **cambios_tecnicos):
         return servicio.registrar_fabricacion(
             of_origen=of, proceso=proceso,
             info_externa=info if info is not None else info_externa(),
@@ -84,6 +89,7 @@ class BaseGrabados(TestCase):
             datos_manuales=datos_manuales or {},
             usuario=usuario or self.operario,
             tipo=tipo,
+            ubicacion_sobre=ubicacion_sobre,
         )
 
 
@@ -798,7 +804,8 @@ class DetalleGrabadoTests(BaseGrabados):
 # INVENTARIO DE GRABADOS
 # ============================================================
 
-class InventarioGrabadosTests(BaseGrabados):
+class BaseInventario(BaseGrabados):
+    """Datos y ayudas compartidos por las pruebas del Inventario (sin pruebas propias)."""
 
     def setUp(self):
         # 22741 STAMPING: K1 1 rechazado + K1 2 pendiente -> PENDIENTE_K1
@@ -822,6 +829,9 @@ class InventarioGrabadosTests(BaseGrabados):
 
     def ofs(self, respuesta):
         return sorted(g['of_origen'] for g in respuesta['data'])
+
+
+class InventarioGrabadosTests(BaseInventario):
 
     def test_requiere_login(self):
         self.client.logout()
@@ -945,6 +955,168 @@ class InventarioGrabadosTests(BaseGrabados):
         js = (Path(__file__).parent / 'static' / 'js' / 'inventario_grabados.js').read_text(encoding='utf-8')
         self.assertNotIn('inv-aviso-limite', js)
         self.assertIn('Mostrando ${res.data.length} de ${res.total}', js)
+
+
+class InventarioFiltrosColumnaTests(BaseInventario):
+    """Filtros por columna del Inventario (embudo en cada encabezado), en el servidor."""
+
+    def filtrar(self, *filtros, **params):
+        return self.api(filtros=json.dumps(list(filtros)), **params)
+
+    def test_incluir_valores(self):
+        res = self.filtrar({'col': 'estado', 'in': ['APROBADO']})
+        self.assertEqual((self.ofs(res), res['total']), (['22800'], 1))
+        self.assertEqual(self.ofs(self.filtrar({'col': 'cliente', 'in': ['CLIENTE SA']})), ['22741', '22900'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'of', 'in': ['22741', '22800']})), ['22741', '22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'proceso', 'in': ['EMBOSSING']})), ['22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'tipo', 'in': ['K1']})), ['22741', '22800', '22900'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'referencia', 'in': ['FLOR DE LAS ANTILLAS']})), ['22800'])
+
+    def test_excluir_valores(self):
+        self.assertEqual(self.ofs(self.filtrar({'col': 'cliente', 'fuera': ['MY FATHER CIGARS']})),
+                         ['22741', '22900'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'estado', 'fuera': ['PENDIENTE_K1']})), ['22800'])
+
+    def test_valor_vacio(self):
+        # 22741 y 22900 no tienen ubicación: '—' los incluye (null o '').
+        Grabado.objects.filter(of_origen='22900').update(ubicacion='')
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ubicacion', 'in': ['—']})), ['22741', '22900'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ubicacion', 'fuera': ['—']})), ['22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ubicacion', 'in': ['Cajón B2', '—']})),
+                         ['22741', '22800', '22900'])
+
+    def test_columnas_numericas_y_de_k1(self):
+        self.assertEqual(self.ofs(self.filtrar({'col': 'intentos', 'in': ['2']})), ['22741'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'intentos', 'fuera': ['2']})), ['22800', '22900'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'usos', 'in': ['4']})), ['22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ultimo_k1', 'in': ['APROBADO']})), ['22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ultimo_k1', 'in': ['PENDIENTE']})), ['22741', '22900'])
+        # Sin K1: 0 intentos y último K1 vacío.
+        Grabado.objects.create(of_origen='25000', proceso='STAMPING', cliente='X', estado='APROBADO', tipo='LEGADO')
+        self.assertEqual(self.ofs(self.filtrar({'col': 'intentos', 'in': ['0']})), ['25000'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'ultimo_k1', 'in': ['—']})), ['25000'])
+
+    def test_rango_de_fechas(self):
+        hoy = timezone.localdate()
+        ayer = (hoy - timedelta(days=1)).isoformat()
+        self.assertEqual(self.filtrar({'col': 'creado', 'desde': hoy.isoformat()})['total'], 3)
+        self.assertEqual(self.filtrar({'col': 'creado', 'hasta': ayer})['total'], 0)
+        Grabado.objects.filter(of_origen='22800').update(
+            actualizado_el=datetime(2026, 1, 15, 12, tzinfo=dt_timezone.utc))
+        res = self.filtrar({'col': 'modificado', 'desde': '2026-01-01', 'hasta': '2026-01-31'})
+        self.assertEqual(self.ofs(res), ['22800'])
+        self.assertEqual(self.ofs(self.filtrar({'col': 'modificado', 'desde': hoy.isoformat()})), ['22741', '22900'])
+
+    def test_combinado_con_busqueda_tarjetas_proceso_y_tipo(self):
+        filtro = {'col': 'intentos', 'in': ['1']}
+        res = self.filtrar(filtro)
+        # Las tarjetas cuentan con los filtros de columna.
+        self.assertEqual((res['conteos']['PENDIENTE_K1'], res['conteos']['APROBADO']), (1, 1))
+        self.assertEqual(self.ofs(self.filtrar(filtro, q='cliente')), ['22900'])
+        res = self.filtrar(filtro, estado='APROBADO')
+        self.assertEqual((self.ofs(res), res['conteos']['PENDIENTE_K1']), (['22800'], 1))
+        self.assertEqual(self.ofs(self.filtrar(filtro, proceso='STAMPING')), ['22900'])
+        self.assertEqual(self.filtrar(filtro, tipo='DIRECTO')['total'], 0)
+        # Varias columnas a la vez: se cumplen todas.
+        self.assertEqual(self.ofs(self.filtrar(filtro, {'col': 'cliente', 'in': ['CLIENTE SA']})), ['22900'])
+
+    def test_tope_con_filtros(self):
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_INVENTARIO', 1):
+            res = self.filtrar({'col': 'cliente', 'in': ['CLIENTE SA']})
+        self.assertEqual((len(res['data']), res['total'], res['limite']), (1, 2, 1))
+
+    def test_filtros_invalidos(self):
+        for filtros in ('{no es json', json.dumps([{'col': 'otra', 'in': ['x']}]),
+                        json.dumps([{'col': 'usos', 'in': ['muchos']}]),
+                        json.dumps([{'col': 'creado', 'desde': '15/01/2026'}]),
+                        json.dumps({'col': 'estado'})):
+            with self.subTest(filtros=filtros):
+                respuesta = self.client.get(reverse('grabados:api_inventario'), {'filtros': filtros})
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertEqual(respuesta.json()['status'], 'error')
+
+    def valores(self, **params):
+        respuesta = self.client.get(reverse('grabados:api_inventario_valores'), params)
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        return respuesta.json()
+
+    def test_valores_de_todos_los_grabados(self):
+        self.assertEqual(sorted(self.valores(col='cliente')['valores']), ['CLIENTE SA', 'MY FATHER CIGARS'])
+        self.assertEqual(sorted(self.valores(col='intentos')['valores']), [1, 2])
+        self.assertEqual(sorted(self.valores(col='ultimo_k1')['valores']), ['APROBADO', 'PENDIENTE'])
+        estado = self.valores(col='estado')
+        self.assertEqual(sorted(estado['valores']), ['APROBADO', 'PENDIENTE_K1'])
+        self.assertEqual(estado['etiquetas']['PENDIENTE_K1'], 'Pendiente de K1')
+        self.assertEqual(self.valores(col='cliente')['etiquetas'], {})
+        # Fuera del tope de 500: los valores salen de todos los grabados.
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_INVENTARIO', 1):
+            self.assertEqual(len(self.valores(col='of')['valores']), 3)
+
+    def test_valores_respetan_la_busqueda(self):
+        self.assertEqual(self.valores(col='cliente', q='father')['valores'], ['MY FATHER CIGARS'])
+
+    def test_valores_columna_desconocida(self):
+        respuesta = self.client.get(reverse('grabados:api_inventario_valores'), {'col': 'fecha'})
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_valores_requiere_login(self):
+        self.client.logout()
+        respuesta = self.client.get(reverse('grabados:api_inventario_valores'), {'col': 'cliente'})
+        self.assertEqual(respuesta.status_code, 302)
+
+    def test_pagina_con_embudo_en_cada_columna(self):
+        respuesta = self.client.get(reverse('grabados:inventario_grabados'))
+        for col in ('of', 'proceso', 'cliente', 'referencia', 'estado', 'tipo', 'intentos', 'ultimo_k1',
+                    'usos', 'ubicacion', 'modificado', 'creado'):
+            with self.subTest(col=col):
+                self.assertContains(respuesta, f'data-columna="{col}"')
+                self.assertContains(respuesta, f'id="inv-punto-{col}"')
+        self.assertEqual(set(selectors.CAMPOS_INVENTARIO) | set(selectors.CAMPOS_FECHA_INVENTARIO),
+                         {'of', 'proceso', 'cliente', 'referencia', 'estado', 'tipo', 'intentos', 'ultimo_k1',
+                          'usos', 'ubicacion', 'modificado', 'creado'})
+        self.assertContains(respuesta, 'id="filtro-columna-panel"')
+        self.assertContains(respuesta, 'id="inv-quitar-columnas"')
+        self.assertContains(respuesta, 'id="inv-limpiar-columna"')
+
+    def test_usa_el_componente_compartido_de_filtros(self):
+        respuesta = self.client.get(reverse('grabados:inventario_grabados'))
+        self.assertContains(respuesta, 'js/componentes/filtro_columna.js')
+        js = (RUTA_JS / 'inventario_grabados.js').read_text(encoding='utf-8')
+        self.assertIn('window.FiltroColumna.crear', js)
+        self.assertIn("api/inventario/valores/", js)
+
+    def test_referencia_se_muestra_como_descripcion(self):
+        respuesta = self.client.get(reverse('grabados:inventario_grabados'))
+        self.assertContains(respuesta, 'data-nombre="Descripción"')
+        self.assertContains(respuesta, 'cliente o descripción...')
+        self.assertNotContains(respuesta, '<th>Referencia')
+        self.assertNotContains(respuesta, 'data-nombre="Referencia"')
+        js = (RUTA_JS / 'inventario_grabados.js').read_text(encoding='utf-8')
+        self.assertIn('data-label="Descripción"', js)
+        self.assertNotIn('data-label="Referencia"', js)
+        panel = (RUTA_JS / 'componentes' / 'panel_grabado.js').read_text(encoding='utf-8')
+        self.assertIn("dato('Descripción', escapar(d.referencia)", panel)
+        self.assertNotIn("dato('Referencia'", panel)
+
+
+class TextoLargoEnUnaLineaTests(BaseGrabados):
+    """Texto largo cortado con "..." y completo en el tooltip (clase celda-texto)."""
+
+    def test_las_cuatro_pantallas_usan_celda_texto_con_title(self):
+        for archivo in ('inventario_grabados.js', 'grabados_tabla.js', 'plani_tabla.js', 'sobres.js'):
+            with self.subTest(archivo=archivo):
+                js = (RUTA_JS / archivo).read_text(encoding='utf-8')
+                self.assertRegex(js, r'class="[^"]*celda-texto[^"]*" title="\$\{')
+        css = (RUTA_JS.parent / 'css' / 'grabados_tabla.css').read_text(encoding='utf-8')
+        regla = css[css.index('.celda-texto {'):]
+        regla = regla[:regla.index('}')]
+        for propiedad in ('text-overflow: ellipsis', 'white-space  : nowrap', 'overflow     : hidden'):
+            self.assertIn(propiedad, regla)
+
+    def test_consulta_escapa_el_title_de_la_descripcion(self):
+        js = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
+        self.assertNotIn('title="${reg.desc}"', js)
+        self.assertIn('title="${tituloCelda(reg.desc)}"', js)
 
 
 # ============================================================
@@ -1913,6 +2085,21 @@ class PlaniVistasTests(BasePlani):
         self.assertContains(respuesta, '"STAR FOIL"')               # máquinas activas normalizadas
         self.assertNotContains(respuesta, '"GIETZ 99"')             # inactiva
 
+    def test_pagina_plani_con_filtros_por_columna(self):
+        respuesta = self.client.get(reverse('grabados:plani_consulta'))
+        for col in ('of', 'ref', 'descripcion', 'cliente', 'proceso', 'maquina', 'fecha', 'grabado'):
+            with self.subTest(col=col):
+                self.assertContains(respuesta, f'data-columna="{col}"')
+                self.assertContains(respuesta, f'id="plani-punto-{col}"')
+        for id_html in ('filtro-columna-panel', 'plani-quitar-columnas', 'plani-limpiar-columna'):
+            self.assertContains(respuesta, f'id="{id_html}"')
+        self.assertContains(respuesta, 'js/componentes/filtro_columna.js')
+        # Las filas vienen del Excel: se filtran en la pantalla, sin endpoint de valores.
+        js = (RUTA_JS / 'plani_tabla.js').read_text(encoding='utf-8')
+        self.assertIn('window.FiltroColumna.crear', js)
+        self.assertIn("columnasFecha: ['fecha']", js)
+        self.assertContains(respuesta, 'Busca por OF de origen, cliente o descripción...')   # buscador de "Usar otro grabado"
+
     def test_endpoints_viejos_eliminados(self):
         for ruta in ('/grabados/api/registrar/', '/grabados/api/confirmar/'):
             self.assertEqual(self.client.post(ruta).status_code, 404)
@@ -1944,7 +2131,7 @@ class LimpiarTextoExcelTests(TestCase):
 class PermisosModuloGrabadosTests(BaseGrabados):
 
     PAGINAS = ('alta_grabado', 'k1_pendientes', 'inventario_grabados', 'plani_consulta',
-               'grabado_consulta', 'grabado_estadisticas')
+               'grabado_consulta', 'grabado_estadisticas', 'sobres')
 
     def rutas(self):
         """(nombre, url) de TODAS las rutas del módulo, con valores de relleno
@@ -2119,7 +2306,7 @@ class FabricacionRetiradaTests(BaseGrabados):
 RUTA_CONSULTAR_EXTERNOS = 'apps.gestion_grabados.management.commands.migrar_a_grabados.consultar_externos'
 ANTES_DEL_CORTE = datetime(2026, 7, 1, 12, 0, tzinfo=dt_timezone.utc)
 DESPUES_DEL_CORTE = datetime(2026, 9, 1, 12, 0, tzinfo=dt_timezone.utc)
-MODELOS_NUEVOS = (Grabado, FabricacionGrabado, EnvioMaquina, Maquina, LegadoOrden)
+MODELOS_NUEVOS = (Grabado, FabricacionGrabado, EnvioMaquina, Maquina, LegadoOrden, Sobre)
 
 
 class MigrarAGrabadosTests(TestCase):
@@ -2395,6 +2582,30 @@ class MigrarAGrabadosTests(TestCase):
         antes = OrdenFabricacion.objects.values().get(pk=orden.pk)
         self.migrar('--aplicar')
         self.assertEqual(OrdenFabricacion.objects.values().get(pk=orden.pk), antes)
+
+    def test_crea_el_sobre_de_cada_grabado_migrado(self):
+        self.orden('22741', sobre='10567.0')
+        self.orden('22800', proceso='EMBOSSING', sobre=None)
+        salida = self.migrar('--aplicar')
+
+        for grabado in Grabado.objects.select_related('sobre_asociado'):
+            sobre = grabado.sobre_asociado
+            self.assertIsNotNone(sobre, grabado)
+            self.assertEqual((sobre.of_origen, sobre.proceso), (grabado.of_origen, grabado.proceso))
+            self.assertIsNone(sobre.ubicacion)
+            self.assertEqual(sobre.estado, 'ACTIVO')
+        self.assertEqual(Sobre.objects.get(of_origen='22741').codigo, '10567')
+        self.assertEqual(Sobre.objects.get(of_origen='22800').codigo, '')
+        self.assertRegex(salida, r'Sobres creados\s+2')
+
+    def test_grabado_reutilizado_sin_sobre_recibe_el_suyo(self):
+        existente = Grabado.objects.create(of_origen='22741', proceso='STAMPING', cliente='ALTA',
+                                           estado='APROBADO', tipo='K1', sobre='S-1')
+        self.orden('22741')
+        self.migrar('--aplicar')
+        existente.refresh_from_db()
+        self.assertEqual(existente.sobre_asociado.codigo, 'S-1')
+        self.assertEqual(Sobre.objects.count(), 1)
 
 
 # ============================================================
@@ -2700,3 +2911,413 @@ class GrabadoNoSeEliminaTests(BaseGrabados):
         # migrar_a_grabados crea sus grabados con tipo='LEGADO' (cubierto en MigrarAGrabadosTests).
         fuente = Path(__file__).with_name('management') / 'commands' / 'migrar_a_grabados.py'
         self.assertIn("tipo='LEGADO'", fuente.read_text(encoding='utf-8'))
+
+
+# ============================================================
+# SOBRES: modelo, migración de datos, servicios, pantalla y admin
+# ============================================================
+
+class LimpiarCodigoSobreTests(TestCase):
+
+    CASOS = [
+        ('10567.0', '10567'), ('10567.00', '10567'), (' 10567 ', '10567'), ('10567', '10567'),
+        ('10567.5', '10567.5'), ('Caja  B2', 'Caja B2'), ('S-10', 'S-10'), ('', ''), (None, ''), (10567, '10567'),
+    ]
+
+    def test_limpia_el_codigo(self):
+        for valor, esperado in self.CASOS:
+            with self.subTest(valor=valor):
+                self.assertEqual(servicio_sobres.limpiar_codigo_sobre(valor), esperado)
+
+    def test_la_migracion_usa_la_misma_regla(self):
+        import importlib
+        migracion = importlib.import_module('apps.gestion_grabados.migrations.0026_sobres_existentes')
+        for valor, esperado in self.CASOS:
+            with self.subTest(valor=valor):
+                self.assertEqual(migracion.limpiar_codigo(valor), esperado)
+
+
+class MigracionSobresExistentesTests(TestCase):
+    """migrations/0026_sobres_existentes.crear_sobres sobre grabados ya guardados."""
+
+    FECHA_VIEJA = datetime(2026, 1, 15, 10, 0, tzinfo=dt_timezone.utc)
+
+    def crear_sobres(self):
+        import importlib
+        from django.apps import apps as registro
+        importlib.import_module('apps.gestion_grabados.migrations.0026_sobres_existentes').crear_sobres(registro, None)
+
+    def grabado(self, of, sobre, proceso='STAMPING'):
+        grabado = Grabado.objects.create(of_origen=of, proceso=proceso, cliente='C', referencia='R',
+                                         tipo='LEGADO', estado='APROBADO', sobre=sobre, ubicacion='GBB-1-1')
+        Grabado.objects.filter(pk=grabado.pk).update(actualizado_el=self.FECHA_VIEJA)
+        return grabado
+
+    def test_crea_un_sobre_por_grabado_sin_cambiar_el_grabado(self):
+        self.grabado('10567', '10567.0')
+        self.grabado('10567', ' 10567.0 ', proceso='EMBOSSING')
+        self.grabado('20000', 'Caja B2')
+        self.grabado('30000', '')
+        self.grabado('40000', None)
+        antes = {g['id']: g for g in Grabado.objects.values()}
+
+        self.crear_sobres()
+
+        self.assertEqual(Sobre.objects.count(), 5)
+        for grabado in Grabado.objects.select_related('sobre_asociado'):
+            sobre = grabado.sobre_asociado
+            self.assertEqual((sobre.of_origen, sobre.proceso), (grabado.of_origen, grabado.proceso))
+            self.assertEqual((sobre.ubicacion, sobre.estado, sobre.creado_por), (None, 'ACTIVO', None))
+        codigos = dict(Sobre.objects.filter(proceso='STAMPING').values_list('of_origen', 'codigo'))
+        self.assertEqual(codigos, {'10567': '10567', '20000': 'Caja B2', '30000': '', '40000': ''})
+        self.assertEqual(Sobre.objects.get(of_origen='10567', proceso='EMBOSSING').codigo, '10567')
+
+        # Ningún dato del grabado cambia (ni actualizado_el): solo el enlace al sobre.
+        for g in Grabado.objects.values():
+            self.assertIsNotNone(g.pop('sobre_asociado_id'))
+            previo = dict(antes[g['id']])
+            previo.pop('sobre_asociado_id')
+            self.assertEqual(g, previo)
+            self.assertEqual(g['actualizado_el'], self.FECHA_VIEJA)
+
+    def test_se_puede_repetir_sin_duplicar(self):
+        self.grabado('10567', '10567.0')
+        self.crear_sobres()
+        enlace = Grabado.objects.get().sobre_asociado_id
+        self.grabado('20000', 'S-2')   # grabado nuevo entre corridas
+        self.crear_sobres()
+        self.crear_sobres()
+        self.assertEqual(Sobre.objects.count(), 2)
+        self.assertEqual(Grabado.objects.get(of_origen='10567').sobre_asociado_id, enlace)
+
+    def test_reutiliza_el_sobre_que_ya_existe_para_la_of_y_proceso(self):
+        existente = Sobre.objects.create(of_origen='10567', proceso='STAMPING', codigo='OTRO')
+        self.grabado('10567', '10567.0')
+        self.crear_sobres()
+        self.assertEqual(Sobre.objects.count(), 1)
+        self.assertEqual(Grabado.objects.get().sobre_asociado, existente)
+        existente.refresh_from_db()
+        self.assertEqual(existente.codigo, 'OTRO')
+
+    def test_sin_grabados_no_hace_nada(self):
+        self.crear_sobres()
+        self.assertFalse(Sobre.objects.exists())
+
+
+class SobreAlCrearGrabadoTests(BaseGrabados):
+
+    def test_alta_crea_y_enlaza_el_sobre(self):
+        grabado = self.registrar(info=info_externa(sobre='10567.0'))['grabado']
+        grabado.refresh_from_db()
+        sobre = grabado.sobre_asociado
+        self.assertEqual((sobre.of_origen, sobre.proceso, sobre.codigo), ('22741', 'STAMPING', '10567'))
+        self.assertEqual(grabado.sobre, '10567.0')   # el texto del grabado queda como está
+        self.assertIsNone(sobre.ubicacion)
+        self.assertEqual((sobre.estado, sobre.creado_por), ('ACTIVO', self.operario))
+        self.assertFalse(HistorialUbicacionSobre.objects.exists())
+
+    def test_alta_directa_sin_sobre_en_la_api_crea_el_sobre_sin_codigo(self):
+        grabado = self.registrar(tipo='DIRECTO', info=info_externa(sobre=None))['grabado']
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.sobre_asociado.codigo, '')
+
+    def test_alta_con_ubicacion_del_sobre(self):
+        grabado = self.registrar(ubicacion_sobre=' gbb-2 -1 ')['grabado']
+        sobre = Sobre.objects.get(grabado=grabado)
+        self.assertEqual(sobre.ubicacion, 'GBB-2-1')
+        historial = HistorialUbicacionSobre.objects.get()
+        self.assertEqual((historial.sobre, historial.ubicacion_anterior, historial.ubicacion_nueva,
+                          historial.origen, historial.usuario),
+                         (sobre, None, 'GBB-2-1', 'ALTA', self.operario))
+
+    def test_ubicacion_del_sobre_invalida_no_guarda_nada(self):
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'no es válida'):
+            self.registrar(ubicacion_sobre='Cajón B2')
+        for modelo in (Grabado, Sobre, FabricacionGrabado, PruebaK1, HistorialUbicacionSobre):
+            self.assertFalse(modelo.objects.exists(), modelo.__name__)
+
+    def test_refabricacion_no_crea_otro_sobre(self):
+        grabado = self.registrar(tipo='DIRECTO')['grabado']
+        Grabado.objects.filter(pk=grabado.pk).update(estado='REPETIR')
+        resultado = self.registrar(tipo=None, ubicacion_sobre='GBB-9-9')
+        self.assertEqual(resultado['accion'], servicio.ACCION_REPETICION)
+        self.assertEqual(Sobre.objects.count(), 1)
+        self.assertIsNone(Sobre.objects.get().ubicacion)
+
+    def test_vista_registrar_pasa_la_ubicacion_del_sobre(self):
+        self.client.force_login(self.operario)
+        with mock.patch(RUTA_BUSCAR_EXTERNOS, return_value=info_externa()):
+            respuesta = self.client.post(
+                reverse('grabados:api_alta_registrar'),
+                json.dumps({'of': '22741', 'proceso': 'STAMPING', 'tipo': 'DIRECTO', 'tecnicos': tecnicos(),
+                            'ubicacion_sobre': 'gbb-3-4'}),
+                content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertEqual(Sobre.objects.get().ubicacion, 'GBB-3-4')
+
+    def test_pantalla_crear_grabado_tiene_el_campo(self):
+        self.client.force_login(self.operario)
+        respuesta = self.client.get(reverse('grabados:alta_grabado'))
+        self.assertContains(respuesta, 'id="alta-ubicacion-sobre"')
+        self.assertContains(respuesta, 'Ubicación del sobre:')
+
+
+class SobreServiciosTests(BaseGrabados):
+
+    def setUp(self):
+        self.grabado = self.registrar(tipo='DIRECTO')['grabado']
+        self.grabado.refresh_from_db()
+        self.sobre = self.grabado.sobre_asociado
+
+    def cambiar(self, ubicacion, sobre_id=None):
+        return servicio_sobres.cambiar_ubicacion_sobre(sobre_id=sobre_id or self.sobre.id, ubicacion=ubicacion,
+                                                       usuario=self.operario)
+
+    def test_cambiar_ubicacion_normaliza_y_deja_historial(self):
+        self.assertTrue(self.cambiar(' gbb-2-1 ').ubicacion_cambio)
+        self.cambiar('GAB-1-12')
+        self.sobre.refresh_from_db()
+        self.assertEqual(self.sobre.ubicacion, 'GAB-1-12')
+        self.assertEqual(list(HistorialUbicacionSobre.objects.order_by('id')
+                              .values_list('ubicacion_anterior', 'ubicacion_nueva', 'origen')),
+                         [(None, 'GBB-2-1', 'SOBRES'), ('GBB-2-1', 'GAB-1-12', 'SOBRES')])
+
+    def test_misma_ubicacion_no_escribe(self):
+        self.cambiar('GBB-2-1')
+        self.assertFalse(self.cambiar('gbb-2-1').ubicacion_cambio)
+        self.assertEqual(HistorialUbicacionSobre.objects.count(), 1)
+
+    def test_ubicacion_invalida_o_vacia(self):
+        for valor in ('', 'Cajón B2', 'G-1-1', 'GBB-1234-1'):
+            with self.subTest(valor=valor), self.assertRaises(servicio.ErrorGrabado):
+                self.cambiar(valor)
+        self.assertFalse(HistorialUbicacionSobre.objects.exists())
+
+    def test_sobre_inexistente(self):
+        with self.assertRaises(servicio_sobres.SobreNoExiste) as ctx:
+            self.cambiar('GBB-1-1', sobre_id=999999)
+        self.assertEqual(ctx.exception.status, 404)
+
+    def test_desactivar_y_reactivar(self):
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'motivo'):
+            servicio_sobres.desactivar_sobre(sobre_id=self.sobre.id, motivo='mal', usuario=self.operario)
+
+        sobre = servicio_sobres.desactivar_sobre(sobre_id=self.sobre.id, motivo='Sobre extraviado',
+                                                 usuario=self.operario)
+        sobre.refresh_from_db()
+        self.assertEqual((sobre.estado, sobre.desactivado_por, sobre.motivo_desactivacion),
+                         ('INACTIVO', self.operario, 'Sobre extraviado'))
+        self.assertIsNotNone(sobre.desactivado_el)
+        with self.assertRaises(servicio.TransicionInvalida):
+            servicio_sobres.desactivar_sobre(sobre_id=sobre.id, motivo='Otra vez', usuario=self.operario)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'inactivo'):
+            self.cambiar('GBB-1-1')
+
+        sobre = servicio_sobres.reactivar_sobre(sobre_id=sobre.id, usuario=self.supervisor)
+        sobre.refresh_from_db()
+        self.assertEqual((sobre.estado, sobre.desactivado_por, sobre.desactivado_el, sobre.motivo_desactivacion),
+                         ('ACTIVO', None, None, ''))
+        with self.assertRaises(servicio.TransicionInvalida):
+            servicio_sobres.reactivar_sobre(sobre_id=sobre.id, usuario=self.operario)
+
+        self.assertEqual(list(HistorialActivacionSobre.objects.order_by('id')
+                              .values_list('accion', 'motivo', 'usuario__username')),
+                         [('DESACTIVAR', 'Sobre extraviado', 'operario'), ('REACTIVAR', '', 'supervisor')])
+
+    def test_sobre_y_grabado_son_independientes(self):
+        servicio_sobres.desactivar_sobre(sobre_id=self.sobre.id, motivo='Sobre extraviado', usuario=self.operario)
+        self.grabado.refresh_from_db()
+        self.assertEqual(self.grabado.estado, 'APROBADO')
+
+        servicio_sobres.reactivar_sobre(sobre_id=self.sobre.id, usuario=self.operario)
+        servicio.desactivar_grabado(grabado_id=self.grabado.id, motivo='Grabado roto', usuario=self.operario)
+        self.assertEqual(self.cambiar('GBB-5-5').ubicacion, 'GBB-5-5')
+        self.sobre.refresh_from_db()
+        self.assertEqual(self.sobre.estado, 'ACTIVO')
+
+    def test_cambios_del_sobre_no_tocan_el_grabado(self):
+        antes = Grabado.objects.values().get(pk=self.grabado.pk)
+        self.cambiar('GBB-1-1')
+        servicio_sobres.desactivar_sobre(sobre_id=self.sobre.id, motivo='Sobre extraviado', usuario=self.operario)
+        self.assertEqual(Grabado.objects.values().get(pk=self.grabado.pk), antes)
+
+    def test_el_sobre_no_se_puede_borrar(self):
+        from django.db.models import ProtectedError
+        self.cambiar('GBB-1-1')
+        with self.assertRaises(ProtectedError):
+            Sobre.objects.filter(pk=self.sobre.pk).delete()
+        self.assertTrue(Sobre.objects.filter(pk=self.sobre.pk).exists())
+
+
+class SobresPantallaTests(BaseGrabados):
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+
+    def sobre(self, of, codigo='', ubicacion=None, proceso='STAMPING'):
+        return Sobre.objects.create(of_origen=of, proceso=proceso, codigo=codigo, ubicacion=ubicacion)
+
+    def listar(self, q=''):
+        respuesta = self.client.get(reverse('grabados:api_sobres'), {'q': q})
+        self.assertEqual(respuesta.status_code, 200)
+        return respuesta.json()
+
+    def post(self, nombre, sobre_id, datos=None):
+        return self.client.post(reverse(f'grabados:{nombre}', args=[sobre_id]), json.dumps(datos or {}),
+                                content_type='application/json')
+
+    def test_pagina_y_menu(self):
+        respuesta = self.client.get(reverse('grabados:sobres'))
+        self.assertContains(respuesta, 'Sobres | CIGAR RINGS')
+        self.assertContains(respuesta, '>Sobres</a')
+        self.assertContains(respuesta, 'js/sobres.js')
+
+    def test_lista_columnas_y_orden_por_ultima_modificacion(self):
+        viejo = self.sobre('10000', codigo='111')
+        nuevo = self.sobre('20000', codigo='222', ubicacion='GBB-1-1')
+        Sobre.objects.filter(pk=viejo.pk).update(actualizado_el=datetime(2026, 1, 1, tzinfo=dt_timezone.utc))
+        res = self.listar()
+        self.assertEqual((res['total'], res['limite']), (2, 500))
+        self.assertEqual([s['id'] for s in res['data']], [nuevo.id, viejo.id])
+        fila = res['data'][0]
+        for campo in ('of_origen', 'proceso', 'codigo', 'ubicacion', 'estado', 'estado_display', 'actualizado_el'):
+            self.assertIn(campo, fila)
+        self.assertEqual((fila['codigo'], fila['ubicacion'], fila['estado_display']), ('222', 'GBB-1-1', 'Activo'))
+
+    def test_busqueda_por_of_codigo_y_ubicacion(self):
+        a = self.sobre('10567', codigo='S-1')
+        b = self.sobre('20000', codigo='10999')
+        c = self.sobre('30000', codigo='X', ubicacion='GAB-7-2')
+        self.assertEqual({s['id'] for s in self.listar('10567')['data']}, {a.id})
+        self.assertEqual({s['id'] for s in self.listar('109')['data']}, {b.id})
+        self.assertEqual({s['id'] for s in self.listar('gab-7')['data']}, {c.id})
+        self.assertEqual(self.listar('nada')['total'], 0)
+
+    def test_tope_de_500_con_total(self):
+        for i in range(3):
+            self.sobre(f'4000{i}')
+        with mock.patch.object(selectors, 'LIMITE_SOBRES', 2):
+            res = self.listar()
+        self.assertEqual((len(res['data']), res['total']), (2, 3))
+
+    def test_editar_ubicacion(self):
+        sobre = self.sobre('10000')
+        respuesta = self.post('api_sobre_ubicacion', sobre.id, {'ubicacion': 'gbb-2-1'})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual((respuesta.json()['ubicacion'], respuesta.json()['cambio']), ('GBB-2-1', True))
+        self.assertEqual(HistorialUbicacionSobre.objects.get().usuario, self.operario)
+
+        respuesta = self.post('api_sobre_ubicacion', sobre.id, {'ubicacion': 'Cajón'})
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn('no es válida', respuesta.json()['message'])
+        self.assertEqual(self.post('api_sobre_ubicacion', 999999, {'ubicacion': 'GBB-1-1'}).status_code, 404)
+        self.assertEqual(self.client.get(reverse('grabados:api_sobre_ubicacion', args=[sobre.id])).status_code, 405)
+
+    def test_desactivar_y_reactivar_por_api(self):
+        sobre = self.sobre('10000')
+        self.assertEqual(self.post('api_sobre_desactivar', sobre.id, {'motivo': 'no'}).status_code, 400)
+        respuesta = self.post('api_sobre_desactivar', sobre.id, {'motivo': 'Sobre dañado'})
+        self.assertEqual((respuesta.status_code, respuesta.json()['estado']), (200, 'INACTIVO'))
+        fila = self.listar()['data'][0]
+        self.assertEqual((fila['estado'], fila['motivo_desactivacion'], fila['desactivado_por']),
+                         ('INACTIVO', 'Sobre dañado', 'operario'))
+        self.assertEqual(self.post('api_sobre_ubicacion', sobre.id, {'ubicacion': 'GBB-1-1'}).status_code, 409)
+
+        respuesta = self.post('api_sobre_reactivar', sobre.id)
+        self.assertEqual((respuesta.status_code, respuesta.json()['estado']), (200, 'ACTIVO'))
+        self.assertEqual(self.post('api_sobre_reactivar', sobre.id).status_code, 409)
+        self.assertEqual(self.client.get(reverse('grabados:api_sobre_desactivar', args=[sobre.id])).status_code, 405)
+
+
+class SobresFiltrosColumnaTests(BaseGrabados):
+    """Filtros por columna de la pantalla Sobres (embudo), en el servidor."""
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+        self.a = Sobre.objects.create(of_origen='10000', proceso='STAMPING', codigo='111', ubicacion='GBB-1-1')
+        self.b = Sobre.objects.create(of_origen='20000', proceso='EMBOSSING', codigo='', ubicacion=None)
+        self.c = Sobre.objects.create(of_origen='30000', proceso='STAMPING', codigo='333', ubicacion='GBB-2-2',
+                                      estado='INACTIVO')
+        Sobre.objects.filter(pk=self.a.pk).update(actualizado_el=datetime(2026, 1, 10, 12, tzinfo=dt_timezone.utc))
+
+    def filtrar(self, *filtros, q=''):
+        respuesta = self.client.get(reverse('grabados:api_sobres'), {'q': q, 'filtros': json.dumps(list(filtros))})
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        return {s['id'] for s in respuesta.json()['data']}
+
+    def test_incluir_y_excluir_valores(self):
+        self.assertEqual(self.filtrar({'col': 'proceso', 'in': ['STAMPING']}), {self.a.id, self.c.id})
+        self.assertEqual(self.filtrar({'col': 'estado', 'fuera': ['INACTIVO']}), {self.a.id, self.b.id})
+        self.assertEqual(self.filtrar({'col': 'codigo', 'in': ['—']}), {self.b.id})        # vacío
+        self.assertEqual(self.filtrar({'col': 'ubicacion', 'fuera': ['—']}), {self.a.id, self.c.id})
+
+    def test_rango_de_ultima_modificacion(self):
+        self.assertEqual(self.filtrar({'col': 'modificado', 'desde': '2026-01-01', 'hasta': '2026-01-31'}),
+                         {self.a.id})
+        self.assertNotIn(self.a.id, self.filtrar({'col': 'modificado', 'desde': '2026-02-01'}))
+
+    def test_se_combina_con_la_busqueda_y_el_total(self):
+        self.assertEqual(self.filtrar({'col': 'proceso', 'in': ['STAMPING']}, q='333'), {self.c.id})
+        respuesta = self.client.get(reverse('grabados:api_sobres'),
+                                    {'filtros': json.dumps([{'col': 'proceso', 'in': ['STAMPING']}])})
+        self.assertEqual(respuesta.json()['total'], 2)
+
+    def test_filtros_invalidos_dan_400(self):
+        for filtros in ('no-es-json', json.dumps([{'col': 'cliente', 'in': ['X']}]),
+                        json.dumps([{'col': 'modificado', 'desde': 'ayer'}]), json.dumps({'col': 'of'})):
+            with self.subTest(filtros=filtros):
+                respuesta = self.client.get(reverse('grabados:api_sobres'), {'filtros': filtros})
+                self.assertEqual(respuesta.status_code, 400)
+
+    def test_valores_de_una_columna_con_etiquetas(self):
+        respuesta = self.client.get(reverse('grabados:api_sobres_valores'), {'col': 'estado'})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(set(respuesta.json()['valores']), {'ACTIVO', 'INACTIVO'})
+        self.assertEqual(respuesta.json()['etiquetas'], {'ACTIVO': 'Activo', 'INACTIVO': 'Inactivo'})
+        respuesta = self.client.get(reverse('grabados:api_sobres_valores'), {'col': 'codigo', 'q': '10000'})
+        self.assertEqual(respuesta.json()['valores'], ['111'])
+
+    def test_valores_columna_desconocida_y_login(self):
+        self.assertEqual(self.client.get(reverse('grabados:api_sobres_valores'), {'col': 'fecha'}).status_code, 400)
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse('grabados:api_sobres_valores'), {'col': 'of'}).status_code, 302)
+
+    def test_pagina_con_embudo_en_cada_columna(self):
+        respuesta = self.client.get(reverse('grabados:sobres'))
+        columnas = {'of', 'proceso', 'codigo', 'ubicacion', 'estado', 'modificado'}
+        for col in columnas:
+            with self.subTest(col=col):
+                self.assertContains(respuesta, f'data-columna="{col}"')
+                self.assertContains(respuesta, f'id="sob-punto-{col}"')
+        self.assertEqual(set(selectors.CAMPOS_SOBRES) | set(selectors.CAMPOS_FECHA_SOBRES), columnas)
+        for id_html in ('filtro-columna-panel', 'sob-quitar-columnas', 'sob-limpiar-columna'):
+            self.assertContains(respuesta, f'id="{id_html}"')
+        self.assertContains(respuesta, 'js/componentes/filtro_columna.js')
+
+
+class SobreAdminTests(BaseGrabados):
+
+    def test_admin_no_elimina_sobres_y_la_ubicacion_es_de_solo_lectura(self):
+        sobre = Sobre.objects.create(of_origen='10000', proceso='STAMPING')
+        modelo_admin = admin.site._registry[Sobre]
+        peticion = RequestFactory().get('/')
+        peticion.user = self.admin
+        self.assertFalse(modelo_admin.has_delete_permission(peticion, sobre))
+        self.assertNotIn('delete_selected', modelo_admin.get_actions(peticion))
+        for campo in ('ubicacion', 'estado', 'desactivado_por', 'desactivado_el', 'motivo_desactivacion'):
+            self.assertIn(campo, modelo_admin.get_readonly_fields(peticion, sobre))
+        self.client.force_login(self.admin)
+        url = reverse('admin:gestion_grabados_sobre_delete', args=[sobre.id])
+        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 403)
+        self.assertTrue(Sobre.objects.filter(pk=sobre.pk).exists())
+
+    def test_historiales_de_sobre_son_de_solo_lectura_y_protegen(self):
+        peticion = mock.Mock(user=self.admin)
+        for modelo in (HistorialUbicacionSobre, HistorialActivacionSobre):
+            modelo_admin = admin.site._registry[modelo]
+            with self.subTest(modelo=modelo.__name__):
+                self.assertFalse(modelo_admin.has_add_permission(peticion))
+                self.assertFalse(modelo_admin.has_change_permission(peticion))
+                self.assertFalse(modelo_admin.has_delete_permission(peticion))
+                self.assertEqual(modelo._meta.get_field('sobre').remote_field.on_delete.__name__, 'PROTECT')
+        self.assertEqual(Grabado._meta.get_field('sobre_asociado').remote_field.on_delete.__name__, 'PROTECT')

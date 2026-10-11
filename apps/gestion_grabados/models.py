@@ -321,7 +321,13 @@ class Grabado(models.Model):
         verbose_name="Referencia",
         help_text="Descripción del producto (G_Referencia)."
     )
+    # Texto del sobre tal como vino de la API (se retira en un paso posterior;
+    # el sobre físico es sobre_asociado).
     sobre = models.CharField(max_length=100, blank=True, null=True, verbose_name="Sobre/Caja")
+    sobre_asociado = models.OneToOneField(
+        'Sobre', on_delete=models.PROTECT, null=True, blank=True, related_name='grabado',
+        verbose_name="Sobre", help_text="El sobre con los diseños de creación de este grabado."
+    )
     datos_manuales = models.BooleanField(
         default=False,
         verbose_name="Datos cargados a mano",
@@ -596,6 +602,114 @@ class HistorialActivacion(models.Model):
 
     def __str__(self):
         return f"{self.grabado}: {self.get_accion_display()}"
+
+
+class Sobre(models.Model):
+    """
+    Sobre físico con los diseños de creación de un grabado: uno por grabado,
+    con la misma OF de origen y proceso. Nunca se elimina: se desactiva
+    (services.sobres.desactivar_sobre). Su estado no depende del del grabado.
+    """
+    ESTADO_CHOICES = [
+        ('ACTIVO', 'Activo'),
+        ('INACTIVO', 'Inactivo'),
+    ]
+
+    of_origen = models.CharField(max_length=20, verbose_name="OF de origen")
+    proceso = models.CharField(max_length=20, choices=PROCESO_CHOICES, verbose_name="Proceso")
+    codigo = models.CharField(
+        max_length=100, blank=True, default='', verbose_name="Código",
+        help_text="Número del sobre, limpio (10567.0 -> 10567). Puede quedar vacío."
+    )
+    ubicacion = models.CharField(max_length=200, blank=True, null=True, verbose_name="Ubicación (estantería)")
+    estado = models.CharField(max_length=10, choices=ESTADO_CHOICES, default='ACTIVO', verbose_name="Estado")
+
+    # Última desactivación (se limpian al reactivar; el rastro queda en HistorialActivacionSobre).
+    desactivado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Desactivado por"
+    )
+    desactivado_el = models.DateTimeField(null=True, blank=True, verbose_name="Desactivado el")
+    motivo_desactivacion = models.TextField(blank=True, default='', verbose_name="Motivo de desactivación")
+
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Creado por"
+    )
+    creado_el = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de Creación")
+    actualizado_el = models.DateTimeField(auto_now=True, verbose_name="Última Actualización")
+
+    class Meta:
+        verbose_name = "Sobre"
+        verbose_name_plural = "Sobres"
+        ordering = ['-actualizado_el']
+        constraints = [
+            models.UniqueConstraint(fields=['of_origen', 'proceso'], name='sobre_unico_of_proceso'),
+            models.CheckConstraint(condition=models.Q(estado__in=['ACTIVO', 'INACTIVO']),
+                                   name='sobre_estado_valido'),
+        ]
+        indexes = [
+            # La pantalla Sobres ordena por última modificación.
+            models.Index(fields=['actualizado_el'], name='sobre_actualizado_idx'),
+        ]
+
+    def __str__(self):
+        return f"Sobre {self.codigo or '(sin código)'} – {self.of_origen} {self.proceso}"
+
+
+class HistorialUbicacionSobre(models.Model):
+    """
+    Una fila por cada cambio de ubicación de un sobre. Solo la escribe
+    services.sobres.cambiar_ubicacion_sobre.
+    """
+    ORIGEN_CHOICES = [
+        ('SOBRES', 'Edición en la pantalla Sobres'),
+        ('ALTA', 'Crear Grabado'),
+    ]
+
+    sobre = models.ForeignKey(Sobre, on_delete=models.PROTECT, related_name='historial_ubicaciones')
+    ubicacion_anterior = models.CharField(max_length=200, blank=True, null=True,
+                                          verbose_name="Ubicación anterior")
+    ubicacion_nueva = models.CharField(max_length=200, verbose_name="Ubicación nueva")
+    origen = models.CharField(max_length=20, choices=ORIGEN_CHOICES, verbose_name="Origen")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Usuario"
+    )
+    cambiado_el = models.DateTimeField(auto_now_add=True, verbose_name="Fecha del cambio")
+
+    class Meta:
+        verbose_name = "Cambio de ubicación de sobre"
+        verbose_name_plural = "Historial de ubicaciones de sobres"
+        ordering = ['-cambiado_el', '-id']
+
+    def __str__(self):
+        return f"{self.sobre}: {self.ubicacion_anterior or '—'} -> {self.ubicacion_nueva}"
+
+
+class HistorialActivacionSobre(models.Model):
+    """
+    Una fila por cada desactivación o reactivación de un sobre. Solo la
+    escriben services.sobres.desactivar_sobre / reactivar_sobre.
+    """
+    ACCION_CHOICES = HistorialActivacion.ACCION_CHOICES
+
+    sobre = models.ForeignKey(Sobre, on_delete=models.PROTECT, related_name='historial_activaciones')
+    accion = models.CharField(max_length=20, choices=ACCION_CHOICES, verbose_name="Acción")
+    motivo = models.TextField(blank=True, default='', verbose_name="Motivo")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Usuario"
+    )
+    fecha = models.DateTimeField(auto_now_add=True, verbose_name="Fecha")
+
+    class Meta:
+        verbose_name = "Activación / desactivación de sobre"
+        verbose_name_plural = "Historial de activaciones de sobres"
+        ordering = ['-fecha', '-id']
+
+    def __str__(self):
+        return f"{self.sobre}: {self.get_accion_display()}"
 
 
 class LegadoOrden(models.Model):

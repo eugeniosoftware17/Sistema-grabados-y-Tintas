@@ -4,6 +4,9 @@
    PanelGrabado (static/js/componentes/panel_grabado.js), solo consulta.
    La ubicación se edita con doble clic en su celda (api_grabado_ubicacion):
    Enter guarda, Esc cancela; el servidor valida el formato (ej. GBB-2-1).
+   Filtros por columna (embudo en cada encabezado, componente FiltroColumna):
+   se resuelven en el servidor (selectors.CAMPOS_INVENTARIO) sobre todos los
+   grabados; las opciones salen de api/inventario/valores/.
    ============================================================ */
 
 (function () {
@@ -28,6 +31,12 @@
         const div = document.createElement('div');
         div.textContent = valor === null || valor === undefined || valor === '' ? '—' : String(valor);
         return div.innerHTML;
+    }
+
+    // Texto largo en una línea con "..."; el texto completo en el tooltip (grabados_tabla.css).
+    function celdaTexto(valor) {
+        const texto = escapar(valor);
+        return `<span class="celda-texto" title="${texto.replace(/"/g, '&quot;')}">${texto}</span>`;
     }
 
     function etiqueta(codigo, texto) {
@@ -66,7 +75,7 @@
         $('inv-contador').textContent = `Mostrando ${res.data.length} de ${res.total}`;
 
         if (!grabados.length) {
-            mensajeTabla(filtros.q || filtros.proceso || filtros.tipo || filtros.estado
+            mensajeTabla(filtros.q || filtros.proceso || filtros.tipo || filtros.estado || filtroColumna.hay()
                 ? 'Ningún grabado coincide con los filtros.'
                 : 'Todavía no hay grabados registrados.');
             return;
@@ -76,8 +85,8 @@
                 aria-label="Ver detalle del grabado ${escapar(g.of_origen)} ${escapar(g.proceso)}">
                 <td data-label="OF de origen"><strong>${escapar(g.of_origen)}</strong></td>
                 <td data-label="Proceso">${escapar(g.proceso)}</td>
-                <td data-label="Cliente">${escapar(g.cliente)}</td>
-                <td data-label="Referencia" class="inv-referencia">${escapar(g.referencia)}</td>
+                <td data-label="Cliente">${celdaTexto(g.cliente)}</td>
+                <td data-label="Descripción">${celdaTexto(g.referencia)}</td>
                 <td data-label="Estado">${etiqueta(g.estado, g.estado_display)}</td>
                 <td data-label="Tipo">${etiqueta('tipo-' + g.tipo, g.tipo_display)}</td>
                 <td data-label="Intentos K1" class="inv-centrado">${escapar(g.intentos_k1)}</td>
@@ -109,6 +118,8 @@
         const pedido = ++pedidoActual;
         const params = new URLSearchParams();
         Object.entries(filtros).forEach(([clave, valor]) => { if (valor) params.set(clave, valor); });
+        const deColumna = filtroColumna.paraServidor();
+        if (deColumna.length) params.set('filtros', JSON.stringify(deColumna));
 
         fetch(`/grabados/api/inventario/?${params}`)
             .then(r => r.json())
@@ -121,6 +132,28 @@
             })
             .catch(() => { if (pedido === pedidoActual) mensajeTabla('Error de conexión al cargar el inventario.'); });
     }
+
+    // ---------------------------------------------------- filtros por columna
+    // Componente compartido (static/js/componentes/filtro_columna.js); las opciones
+    // salen de todos los grabados (respetando la búsqueda).
+    const filtroColumna = window.FiltroColumna.crear({
+        ids: { panel: 'filtro-columna-panel', lista: 'filtro-columna-lista', titulo: 'filtro-columna-titulo',
+               limpiar: 'inv-limpiar-columna', quitarTodos: 'inv-quitar-columnas' },
+        idPunto: (col) => `inv-punto-${col}`,
+        columnasFecha: ['modificado', 'creado'],
+        columnasNumericas: ['intentos', 'usos'],
+        obtenerValores: (col) => {
+            const params = new URLSearchParams({ col });
+            if (filtros.q) params.set('q', filtros.q);
+            return fetch(`/grabados/api/inventario/valores/?${params}`)
+                .then(r => r.json())
+                .then(res => {
+                    if (res.status !== 'ok') throw new Error(res.message);
+                    return res;
+                });
+        },
+        alCambiar: () => cargar(),
+    });
 
     function abrirDetalle(id) {
         window.PanelGrabado.abrir(id);   // solo consulta: sin botones de decisión

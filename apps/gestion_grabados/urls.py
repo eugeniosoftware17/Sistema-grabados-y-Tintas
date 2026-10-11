@@ -5,6 +5,7 @@ from apps.core.permisos import proteger_urls
 from . import views
 from . import views_fabricacion
 from . import views_grabados
+from . import views_sobres
 
 
 app_name = 'grabados'
@@ -48,12 +49,21 @@ urlpatterns = [
     path('api/plani/recoger/', views_grabados.api_plani_recoger, name='api_plani_recoger'),
     path('inventario/', views_grabados.inventario_grabados, name='inventario_grabados'),
     path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
+    path('api/inventario/valores/', views_grabados.api_inventario_valores, name='api_inventario_valores'),
     path('api/grabado/<int:grabado_id>/ubicacion/', views_grabados.api_grabado_ubicacion,
          name='api_grabado_ubicacion'),
     path('api/grabado/<int:grabado_id>/desactivar/', views_grabados.api_grabado_desactivar,
          name='api_grabado_desactivar'),
     path('api/grabado/<int:grabado_id>/reactivar/', views_grabados.api_grabado_reactivar,
          name='api_grabado_reactivar'),
+
+    # --- Sobres (ver views_sobres.py) ---
+    path('sobres/', views_sobres.sobres, name='sobres'),
+    path('api/sobres/', views_sobres.api_sobres, name='api_sobres'),
+    path('api/sobres/valores/', views_sobres.api_sobres_valores, name='api_sobres_valores'),
+    path('api/sobre/<int:sobre_id>/ubicacion/', views_sobres.api_sobre_ubicacion, name='api_sobre_ubicacion'),
+    path('api/sobre/<int:sobre_id>/desactivar/', views_sobres.api_sobre_desactivar, name='api_sobre_desactivar'),
+    path('api/sobre/<int:sobre_id>/reactivar/', views_sobres.api_sobre_reactivar, name='api_sobre_reactivar'),
 ]
 
 # Todas las rutas (páginas y APIs) exigen el permiso del módulo Grabados: sin él, 403.

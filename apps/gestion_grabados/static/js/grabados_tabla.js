@@ -132,6 +132,11 @@
       return div.innerHTML;
     }
 
+    // Texto completo para el title de una celda cortada con "..." (.celda-texto).
+    function tituloCelda(valor) {
+      return escaparHtml(valor).replace(/"/g, '&quot;');
+    }
+
     function resaltarTexto(texto, palabras) {
       const str = String(texto || '—');
       if (!palabras || palabras.length === 0) return str;
@@ -313,19 +318,19 @@
           <td data-col="of"><span class="celda-of-enlace">${resaltarTexto(reg.of, palabrasBusqueda)}</span></td>
           <td data-col="origen"><span class="consulta-origen ${reg.origen === ORIGEN_NUEVO ? 'consulta-origen--nuevo' : ''}">${escaparHtml(reg.origen)}</span></td>
           <td data-col="ref"><span class="celda-of-referencia">${resaltarTexto(reg.ref, palabrasBusqueda)}</span></td>
-          <td data-col="cliente"><span class="celda-cliente">${resaltarTexto(reg.cliente, palabrasBusqueda)}</span></td>
-          <td data-col="desc"><span class="celda-descripcion" title="${reg.desc}">${resaltarTexto(reg.desc, palabrasBusqueda)}</span></td>
+          <td data-col="cliente"><span class="celda-cliente celda-texto" title="${tituloCelda(reg.cliente)}">${resaltarTexto(reg.cliente, palabrasBusqueda)}</span></td>
+          <td data-col="desc"><span class="celda-descripcion celda-texto" title="${tituloCelda(reg.desc)}">${resaltarTexto(reg.desc, palabrasBusqueda)}</span></td>
           <td data-col="estado"><span class="celda-estado ${CLASE_POR_ESTADO[reg.estado] || 'estado--pendiente'}">${reg.estado}</span></td>
           <td data-col="fecha">${resaltarTexto(reg.fecha, palabrasBusqueda)}</td>
           <td data-col="fecha_reg">${resaltarTexto(reg.fecha_reg, palabrasBusqueda)}</td>
           <td data-col="proceso">${resaltarTexto(reg.proceso, palabrasBusqueda)}</td>
-          <td data-col="maquina"><span class="celda-maquina">${resaltarTexto(reg.maquina, palabrasBusqueda)}</span></td>
+          <td data-col="maquina"><span class="celda-maquina" title="${tituloCelda(reg.maquina)}"><span class="celda-texto">${resaltarTexto(reg.maquina, palabrasBusqueda)}</span></span></td>
           <td data-col="tipo">${resaltarTexto(reg.tipo, palabrasBusqueda)}</td>
           ${htmlCeldaUbicacion(reg)}
-          <td data-col="sobre"><span class="celda-ubicacion">${SVG_PIN}${resaltarTexto(reg.sobre, palabrasBusqueda)}</span></td>
+          <td data-col="sobre"><span class="celda-ubicacion" title="${tituloCelda(reg.sobre)}">${SVG_PIN}<span class="celda-texto">${resaltarTexto(reg.sobre, palabrasBusqueda)}</span></span></td>
           <td data-col="cantidad">${resaltarTexto(reg.cantidad, palabrasBusqueda)}</td>
           <td data-col="horas">${resaltarTexto(reg.horas, palabrasBusqueda)}</td>
-          <td data-col="responsables">${resaltarTexto(reg.responsables, palabrasBusqueda)}</td>
+          <td data-col="responsables"><span class="celda-texto" title="${tituloCelda(reg.responsables)}">${resaltarTexto(reg.responsables, palabrasBusqueda)}</span></td>
           <td data-col="peso_i">${resaltarTexto(reg.peso_i, palabrasBusqueda)}</td>
           <td data-col="peso_f">${resaltarTexto(reg.peso_f, palabrasBusqueda)}</td>
           <td data-col="perdida">${resaltarTexto(reg.perdida, palabrasBusqueda)}</td>

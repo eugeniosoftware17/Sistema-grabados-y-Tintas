@@ -4,6 +4,8 @@
      ver selectors.estado_grabados_para_plani); aquí solo se pinta.
    - Ya no se cargan datos técnicos: eso es Crear Grabado.
    - El detalle del grabado se abre con el componente PanelGrabado.
+   - Filtros por columna (componente FiltroColumna) en la pantalla: las filas
+     vienen del Excel y de la API (no de la base) y ya están todas aquí.
    ============================================================ */
 
 (function () {
@@ -144,6 +146,11 @@
         return escapar(valor).replace(/"/g, '&quot;');
     }
 
+    // Texto largo en una línea con "..."; el texto completo en el tooltip (grabados_tabla.css).
+    function celdaTexto(valor) {
+        return `<span class="celda-texto" title="${escaparAtributo(valor)}">${escapar(valor)}</span>`;
+    }
+
     // Tipo del grabado abreviado para la tarjeta compacta (el nombre completo va en el title).
     const TIPOS_CORTOS = { K1: 'K1', DIRECTO: 'Prod.', LEGADO: 'Legado' };
 
@@ -248,7 +255,7 @@
             return;
         }
         if (!filtrados.length) {
-            cuerpo.innerHTML = '<tr><td colspan="8" class="tabla-sin-resultados">Ninguna fila coincide con la búsqueda.</td></tr>';
+            cuerpo.innerHTML = '<tr><td colspan="8" class="tabla-sin-resultados">Ninguna fila coincide con la búsqueda o los filtros.</td></tr>';
             return;
         }
         cuerpo.innerHTML = filtrados.map(fila => {
@@ -258,24 +265,69 @@
             <tr class="${terminada ? 'plani-fila--terminada' : ''}" data-indice="${indice}">
                 <td data-label="OF"><strong>${escapar(fila.of)}</strong></td>
                 <td data-label="OF Ref.">${escapar(sinDato(fila.ref_ext) ? '' : fila.ref_ext)}</td>
-                <td data-label="Descripción" class="plani-descripcion">${escapar(fila.descripcion)}</td>
-                <td data-label="Cliente">${escapar(fila.cliente)}</td>
+                <td data-label="Descripción">${celdaTexto(fila.descripcion)}</td>
+                <td data-label="Cliente">${celdaTexto(fila.cliente)}</td>
                 <td data-label="Proceso">${escapar(fila.proceso)}</td>
-                <td data-label="Máquina">${escapar(fila.maquina)}</td>
+                <td data-label="Máquina">${celdaTexto(fila.maquina)}</td>
                 <td data-label="Fecha prog.">${escapar(fila.fecha_programada)}</td>
                 <td data-label="Grabado" class="plani-celda-gestion">${celdaGestion(fila)}</td>
             </tr>`;
         }).join('');
     }
 
-    function aplicarBusqueda() {
+    function cumpleBusqueda(f) {
         const palabras = $('buscador-input').value.toLowerCase().split(/\s+/).filter(Boolean);
-        filtrados = datosPlani.filter(f => {
-            const texto = [f.of, f.ref_ext, f.cliente, f.descripcion].map(v => String(v || '').toLowerCase()).join(' ');
-            return palabras.every(p => texto.includes(p));
-        });
+        const texto = [f.of, f.ref_ext, f.cliente, f.descripcion].map(v => String(v || '').toLowerCase()).join(' ');
+        return palabras.every(p => texto.includes(p));
+    }
+
+    function aplicarBusqueda() {
+        filtrados = datosPlani.filter(f => cumpleBusqueda(f)
+            && COLUMNAS_FILTRO.every(col => filtroColumna.cumple(col, valorColumna(f, col))));
         renderizarTabla();
     }
+
+    // ---------------------------------------------------- filtros por columna
+    const COLUMNAS_FILTRO = ['of', 'ref', 'descripcion', 'cliente', 'proceso', 'maquina', 'fecha', 'grabado'];
+
+    // Lo que se ve en la etiqueta de la columna Grabado (ver celdaGestion).
+    function estadoMostrado(fila) {
+        const e = fila.grabado || {};
+        if (e.accion === 'SIN_PROCESO') return 'Sin datos del proceso';
+        if (e.accion === 'DAR_DE_ALTA') return 'Sin grabado';
+        if (e.accion === 'RECOGER' || e.accion === 'EN_MAQUINA_OTRA') return 'En máquina';
+        return e.grabado ? e.grabado.estado_display : '';
+    }
+
+    // "dd/mm/aaaa" del Excel -> "aaaa-mm-dd" para el rango de fechas; otro texto = sin fecha.
+    function fechaIso(texto) {
+        const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(texto || '').trim());
+        return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
+    }
+
+    function valorColumna(f, col) {
+        switch (col) {
+            case 'of': return f.of;
+            case 'ref': return sinDato(f.ref_ext) ? '' : f.ref_ext;
+            case 'descripcion': return f.descripcion;
+            case 'cliente': return f.cliente;
+            case 'proceso': return f.proceso;
+            case 'maquina': return f.maquina;
+            case 'fecha': return fechaIso(f.fecha_programada);
+            case 'grabado': return estadoMostrado(f);
+        }
+        return '';
+    }
+
+    // Opciones: los valores de las filas cargadas que cumplen la búsqueda.
+    const filtroColumna = window.FiltroColumna.crear({
+        ids: { panel: 'filtro-columna-panel', lista: 'filtro-columna-lista', titulo: 'filtro-columna-titulo',
+               limpiar: 'plani-limpiar-columna', quitarTodos: 'plani-quitar-columnas' },
+        idPunto: (col) => `plani-punto-${col}`,
+        columnasFecha: ['fecha'],
+        obtenerValores: (col) => ({ valores: datosPlani.filter(cumpleBusqueda).map(f => valorColumna(f, col)) }),
+        alCambiar: aplicarBusqueda,
+    });
 
     // -------------------------------------------------------------- exportar
     function exportar() {

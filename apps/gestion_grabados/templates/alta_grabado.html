@@ -89,6 +89,12 @@
           <label for="alta-sobre">Sobre:</label>
           <input type="text" id="alta-sobre" class="control-entrada" readonly>
         </div>
+        <!-- Solo en el alta nueva: el sobre se crea con el grabado (services.sobres). -->
+        <div class="campo-grupo" id="alta-ubicacion-sobre-caja" style="display:none;">
+          <label for="alta-ubicacion-sobre">Ubicación del sobre:</label>
+          <input type="text" id="alta-ubicacion-sobre" class="control-entrada" placeholder="Ej: GBB-2-1 (opcional)"
+                 maxlength="20" style="text-transform: uppercase;" autocomplete="off">
+        </div>
       </div>
 
       <div id="alta-aviso-accion" class="aviso" style="display:none;"></div>

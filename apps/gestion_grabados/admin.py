@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     OrdenFabricacion, EstadoBano,
     Maquina, Grabado, FabricacionGrabado, PruebaK1, EnvioMaquina, LegadoOrden,
-    HistorialUbicacion, HistorialActivacion,
+    HistorialUbicacion, HistorialActivacion, Sobre, HistorialUbicacionSobre, HistorialActivacionSobre,
 )
 
 @admin.register(EstadoBano)
@@ -87,8 +87,8 @@ class GrabadoAdmin(admin.ModelAdmin):
     search_fields = ('of_origen', 'cliente', 'referencia', 'sobre')
     # La ubicación solo cambia por services.grabados.cambiar_ubicacion (con historial) y la
     # desactivación por services.grabados.desactivar_grabado / reactivar_grabado.
-    readonly_fields = ('ubicacion', 'desactivado_por', 'desactivado_el', 'motivo_desactivacion',
-                       'estado_previo', 'creado_por', 'creado_el', 'actualizado_el')
+    readonly_fields = ('ubicacion', 'sobre_asociado', 'desactivado_por', 'desactivado_el',
+                       'motivo_desactivacion', 'estado_previo', 'creado_por', 'creado_el', 'actualizado_el')
     inlines = [FabricacionGrabadoInline, PruebaK1Inline, EnvioMaquinaInline]
 
     def has_delete_permission(self, request, obj=None):
@@ -153,6 +153,50 @@ class HistorialActivacionAdmin(admin.ModelAdmin):
 
     def has_delete_permission(self, request, obj=None):
         return False
+
+
+class SoloLecturaAdmin(admin.ModelAdmin):
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Sobre)
+class SobreAdmin(admin.ModelAdmin):
+    list_display = ('codigo', 'of_origen', 'proceso', 'ubicacion', 'estado', 'actualizado_el')
+    list_filter = ('proceso', 'estado')
+    search_fields = ('of_origen', 'codigo', 'ubicacion')
+    # La ubicación solo cambia por services.sobres.cambiar_ubicacion_sobre (con historial)
+    # y la desactivación por services.sobres.desactivar_sobre / reactivar_sobre.
+    readonly_fields = ('ubicacion', 'estado', 'desactivado_por', 'desactivado_el', 'motivo_desactivacion',
+                       'creado_por', 'creado_el', 'actualizado_el')
+
+    def has_delete_permission(self, request, obj=None):
+        # Un sobre nunca se elimina: se desactiva desde la pantalla Sobres.
+        return False
+
+
+@admin.register(HistorialUbicacionSobre)
+class HistorialUbicacionSobreAdmin(SoloLecturaAdmin):
+    """Solo lectura: lo escribe services.sobres.cambiar_ubicacion_sobre."""
+    list_display = ('sobre', 'ubicacion_anterior', 'ubicacion_nueva', 'origen', 'usuario', 'cambiado_el')
+    list_filter = ('origen',)
+    search_fields = ('sobre__of_origen', 'sobre__codigo', 'ubicacion_anterior', 'ubicacion_nueva')
+    list_select_related = ('sobre', 'usuario')
+
+
+@admin.register(HistorialActivacionSobre)
+class HistorialActivacionSobreAdmin(SoloLecturaAdmin):
+    """Solo lectura: lo escriben services.sobres.desactivar_sobre / reactivar_sobre."""
+    list_display = ('sobre', 'accion', 'motivo', 'usuario', 'fecha')
+    list_filter = ('accion',)
+    search_fields = ('sobre__of_origen', 'sobre__codigo', 'motivo')
+    list_select_related = ('sobre', 'usuario')
 
 
 @admin.register(LegadoOrden)

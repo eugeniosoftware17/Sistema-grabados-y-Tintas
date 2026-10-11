@@ -91,7 +91,7 @@
                 ${dato('Estado', etiqueta(d.estado, d.estado_display))}
                 ${dato('Tipo', etiqueta('tipo-' + d.tipo, d.tipo_display))}
                 ${dato('Cliente', escapar(d.cliente), true)}
-                ${dato('Referencia', escapar(d.referencia), true)}
+                ${dato('Descripción', escapar(d.referencia), true)}
                 ${dato('Sobre', escapar(d.sobre))}
                 ${dato('Origen de los datos', origen)}            </dl>`);
     }

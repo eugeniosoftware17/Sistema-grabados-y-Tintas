@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% load static estaticos %}
+
+{% block title %}Sobres | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static_v 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
+<style>
+    /* Estilos propios de la pantalla Sobres (ver views_sobres.py). Etiquetas y
+       botones reutilizan .pg-etiqueta / .pg-boton del panel de detalle. */
+    .pg-etiqueta--ACTIVO { background: #d1e7dd; color: #0a5c36; }
+    .sob-acciones { text-align: center; white-space: nowrap; }
+    .sob-acciones .pg-boton { padding: 5px 10px; font-size: 12px; }
+
+    /* Ubicación editable con doble clic (ver sobres.js). */
+    .sob-ubicacion { cursor: text; white-space: nowrap; }
+    .sob-ubicacion:hover { background: #f0f9f4; }
+    .sob-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    .sob-ubicacion-bloqueada { white-space: nowrap; color: #6c757d; cursor: not-allowed; }
+    .sob-ubicacion__input { width: 110px; padding: 4px 6px; border: 1px solid #2d8a3e; border-radius: 6px;
+                            font-size: 13px; font-family: inherit; text-transform: uppercase; }
+    .sob-ubicacion__error { color: #d32f2f; font-size: 11px; margin-top: 3px; white-space: normal; max-width: 220px; }
+    .sob-ubicacion__error:empty { display: none; }
+    .sob-modificado { white-space: nowrap; }
+    .tabla-registros th { white-space: nowrap; }   /* embudo junto al nombre de la columna */
+
+    .sob-modal { max-width: 480px; }
+    .sob-modal .boton:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    @media (max-width: 600px) {
+        /* Tarjetas de la tabla: base en grabados_tabla.css (data-label de cada td). */
+        .tabla-registros tbody td { gap: 10px; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+        .sob-acciones { text-align: right; }
+        .sob-ubicacion__input { width: 130px; font-size: 16px; }   /* 16px: iOS no hace zoom al enfocar */
+        .sob-ubicacion__error { max-width: none; text-align: right; }
+        .sob-modal .dashboard-pie { flex-direction: column-reverse; }
+        .sob-modal .dashboard-pie .boton { width: 100%; }
+
+        body:has(.sob-pagina) { height: auto; overflow-y: auto; }
+        .tabla-contenedor.sob-pagina { height: auto; overflow: visible; }
+        .sob-pagina .tabla-area-datos { overflow: visible; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+
+  <div class="tabla-contenedor sob-pagina">
+    <header class="pagina-encabezado pagina-encabezado--en-tarjeta">
+      <div>
+        <h1 class="pagina-titulo">
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/>
+          </svg>
+          Sobres
+        </h1>
+        <p class="pagina-descripcion">Los sobres con los diseños de creación de cada grabado y dónde están guardados.</p>
+      </div>
+      <div class="tabla-cabecera__contador" id="sob-contador"></div>
+    </header>
+
+    <div class="tabla-barra-herramientas">
+      <div class="buscador-contenedor">
+        <svg viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="search" id="sob-buscador" placeholder="Busca por OF, código o ubicación..."
+               aria-label="Buscar sobres" autocomplete="off">
+      </div>
+      <button type="button" class="fc-quitar" id="sob-quitar-columnas">Quitar filtros de columna ✕</button>
+    </div>
+
+    <div class="tabla-area-datos">
+      <table class="tabla-registros">
+        <thead>
+          <tr>
+            <th>OF de origen
+              <button type="button" class="boton-filtro-columna" data-columna="of" data-nombre="OF de origen" title="Filtrar OF de origen">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-of"></span>
+            </th>
+            <th>Proceso
+              <button type="button" class="boton-filtro-columna" data-columna="proceso" data-nombre="Proceso" title="Filtrar Proceso">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-proceso"></span>
+            </th>
+            <th>Código
+              <button type="button" class="boton-filtro-columna" data-columna="codigo" data-nombre="Código" title="Filtrar Código">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-codigo"></span>
+            </th>
+            <th title="Doble clic en la celda para editar">Ubicación
+              <button type="button" class="boton-filtro-columna" data-columna="ubicacion" data-nombre="Ubicación" title="Filtrar Ubicación">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-ubicacion"></span>
+            </th>
+            <th>Estado
+              <button type="button" class="boton-filtro-columna" data-columna="estado" data-nombre="Estado" title="Filtrar Estado">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-estado"></span>
+            </th>
+            <th>Última modificación
+              <button type="button" class="boton-filtro-columna" data-columna="modificado" data-nombre="Última modificación" title="Filtrar Última modificación">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button><span class="fc-punto" id="sob-punto-modificado"></span>
+            </th>
+            <th class="sob-acciones">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="sob-cuerpo">
+          <tr><td colspan="7" class="tabla-sin-resultados">Cargando...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Panel flotante compartido por los filtros de columna (componente FiltroColumna). -->
+    <div id="filtro-columna-panel" class="filtro-columna-panel" style="display:none;">
+      <div class="filtro-columna-panel__cabecera">
+        <span id="filtro-columna-titulo">Filtrar</span>
+        <button type="button" class="boton--restablecer" id="sob-limpiar-columna">Limpiar</button>
+      </div>
+      <div class="filtro-columna-panel__lista" id="filtro-columna-lista"></div>
+    </div>
+  </div>
+
+<!-- DESACTIVAR SOBRE -->
+<div id="sob-modal-desactivar" class="overlay-moderno" style="display: none">
+  <div class="dashboard-card sob-modal" role="dialog" aria-modal="true" aria-labelledby="sob-desactivar-titulo">
+    <div class="dashboard-cabecera" style="background: #842029;">
+      <h3 id="sob-desactivar-titulo">Desactivar sobre</h3>
+      <p id="sob-desactivar-subtitulo"></p>
+    </div>
+    <form class="dashboard-cuerpo" onsubmit="return false;">
+      <div class="campo-grupo">
+        <label for="sob-motivo">Motivo de la desactivación: <span class="obligatorio">*</span></label>
+        <textarea id="sob-motivo" class="control-entrada area-texto" rows="3" maxlength="500"
+                  placeholder="Por qué se desactiva este sobre..."></textarea>
+      </div>
+      <div id="sob-desactivar-aviso" class="aviso aviso--error" role="alert" style="display:none;"></div>
+    </form>
+    <div class="dashboard-pie">
+      <button type="button" class="boton boton--cancelar" id="sob-btn-cancelar">Cancelar</button>
+      <button type="button" class="boton boton--guardar" id="sob-btn-confirmar" style="background:#842029;">Desactivar</button>
+    </div>
+  </div>
+</div>
+
+<script src="{% static_v 'js/componentes/filtro_columna.js' %}"></script>
+<script src="{% static_v 'js/sobres.js' %}"></script>
+{% endblock %}

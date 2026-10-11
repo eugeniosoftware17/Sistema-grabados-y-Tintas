@@ -4,7 +4,7 @@
 {% block title %}Programación de Producción (Planning) | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
-<link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_tabla.css' %}">
 <link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
 <link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
 <style>
@@ -54,7 +54,7 @@
     .plani-accion--recoger:hover { background: #0d4f9c; }
     .plani-accion--contorno { background: #fff; color: #1b5e20; border: 1px solid #2d8a3e; }
     .plani-accion--contorno:hover { background: #f0f9f4; }
-    .plani-descripcion { max-width: 260px; overflow-wrap: anywhere; }
+    .tabla-registros th { white-space: nowrap; }   /* embudo junto al nombre de la columna */
 
     /* Overlay de carga de la sincronización */
     #overlay-proceso { background: rgba(255, 255, 255, 0.9); }
@@ -90,7 +90,6 @@
         .tabla-registros tbody td.plani-celda-gestion { display: block; width: auto; min-width: 0; text-align: left; }
         .tabla-registros tbody td.plani-celda-gestion::before { display: block; margin-bottom: 4px; }
         .plani-pagina .tabla-registros tbody td { padding: 4px; }
-        .plani-descripcion { max-width: none; }
         .plani-resumen { grid-template-columns: minmax(0, 1fr); }
         .plani-modal .dashboard-pie { flex-direction: column-reverse; }
         .plani-modal .dashboard-pie .boton { width: 100%; }
@@ -131,20 +130,53 @@
       <svg viewBox="0 0 24 24" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Exportar
     </button>
+    <button type="button" class="fc-quitar" id="plani-quitar-columnas">Quitar filtros de columna ✕</button>
   </div>
 
   <div class="tabla-area-datos">
     <table class="tabla-registros">
       <thead>
         <tr>
-          <th>OF</th>
-          <th>OF Ref.</th>
-          <th>Descripción</th>
-          <th>Cliente</th>
-          <th>Proceso</th>
-          <th>Máquina</th>
-          <th>Fecha prog.</th>
-          <th class="plani-col-grabado">Grabado</th>
+          <th>OF
+            <button type="button" class="boton-filtro-columna" data-columna="of" data-nombre="OF" title="Filtrar OF">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-of"></span>
+          </th>
+          <th>OF Ref.
+            <button type="button" class="boton-filtro-columna" data-columna="ref" data-nombre="OF Ref." title="Filtrar OF Ref.">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-ref"></span>
+          </th>
+          <th>Descripción
+            <button type="button" class="boton-filtro-columna" data-columna="descripcion" data-nombre="Descripción" title="Filtrar Descripción">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-descripcion"></span>
+          </th>
+          <th>Cliente
+            <button type="button" class="boton-filtro-columna" data-columna="cliente" data-nombre="Cliente" title="Filtrar Cliente">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-cliente"></span>
+          </th>
+          <th>Proceso
+            <button type="button" class="boton-filtro-columna" data-columna="proceso" data-nombre="Proceso" title="Filtrar Proceso">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-proceso"></span>
+          </th>
+          <th>Máquina
+            <button type="button" class="boton-filtro-columna" data-columna="maquina" data-nombre="Máquina" title="Filtrar Máquina">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-maquina"></span>
+          </th>
+          <th>Fecha prog.
+            <button type="button" class="boton-filtro-columna" data-columna="fecha" data-nombre="Fecha prog." title="Filtrar Fecha prog.">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-fecha"></span>
+          </th>
+          <th class="plani-col-grabado">Grabado
+            <button type="button" class="boton-filtro-columna" data-columna="grabado" data-nombre="Grabado" title="Filtrar Grabado">
+              <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+            </button><span class="fc-punto" id="plani-punto-grabado"></span>
+          </th>
         </tr>
       </thead>
       <tbody id="tabla-cuerpo">
@@ -155,6 +187,15 @@
 
   <div class="tabla-pie">
     <div class="tabla-pie__info" id="pie-info"></div>
+  </div>
+
+  <!-- Panel flotante compartido por los filtros de columna (componente FiltroColumna). -->
+  <div id="filtro-columna-panel" class="filtro-columna-panel" style="display:none;">
+    <div class="filtro-columna-panel__cabecera">
+      <span id="filtro-columna-titulo">Filtrar</span>
+      <button type="button" class="boton--restablecer" id="plani-limpiar-columna">Limpiar</button>
+    </div>
+    <div class="filtro-columna-panel__lista" id="filtro-columna-lista"></div>
   </div>
 </div>
 
@@ -188,7 +229,7 @@
 
       <div class="plani-otros" id="mandar-otros" style="display:none;">
         <label for="mandar-otros-buscar" class="plani-nota">Grabados aprobados del mismo proceso</label>
-        <input type="search" id="mandar-otros-buscar" class="control-entrada" placeholder="Busca por OF de origen, cliente o referencia..." autocomplete="off">
+        <input type="search" id="mandar-otros-buscar" class="control-entrada" placeholder="Busca por OF de origen, cliente o descripción..." autocomplete="off">
         <ul class="plani-otros__lista" id="mandar-otros-lista"></ul>
       </div>
 
@@ -246,5 +287,6 @@
 {{ maquinas_activas|json_script:"plani-maquinas-activas" }}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/componentes/filtro_columna.js' %}"></script>
 <script src="{% static_v 'js/plani_tabla.js' %}"></script>
 {% endblock %}

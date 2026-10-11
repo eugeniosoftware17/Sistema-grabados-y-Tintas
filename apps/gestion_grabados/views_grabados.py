@@ -108,6 +108,7 @@ def api_alta_registrar(request):
             },
             usuario=request.user,
             tipo=str(data.get('tipo') or '').strip().upper() or None,
+            ubicacion_sobre=data.get('ubicacion_sobre'),
         )
     except servicio.ErrorGrabado as e:
         return _error(e.mensaje, status=e.status)
@@ -232,7 +233,8 @@ def inventario_grabados(request):
 @login_required
 def api_inventario(request):
     """Conteos por estado y listado de grabados, con filtros opcionales
-    ?q=texto&proceso=STAMPING|EMBOSSING&estado=<estado>&tipo=K1|DIRECTO|LEGADO. Solo lectura."""
+    ?q=texto&proceso=STAMPING|EMBOSSING&estado=<estado>&tipo=K1|DIRECTO|LEGADO&filtros=<JSON>
+    (filtros por columna, ver selectors.CAMPOS_INVENTARIO). Solo lectura."""
     if request.method != 'GET':
         return _error('Método no permitido', status=405)
     q = request.GET.get('q', '').strip()
@@ -245,8 +247,25 @@ def api_inventario(request):
         return _error('Estado inválido.')
     if tipo and tipo not in selectors.TIPOS_GRABADO:
         return _error('Tipo inválido.')
-    return JsonResponse({'status': 'ok',
-                         **selectors.inventario_grabados(q=q, proceso=proceso, estado=estado, tipo=tipo)})
+    try:
+        filtros = json.loads(request.GET.get('filtros') or '[]')
+        resultado = selectors.inventario_grabados(q=q, proceso=proceso, estado=estado, tipo=tipo, filtros=filtros)
+    except json.JSONDecodeError:
+        return _error('Filtros inválidos.')
+    except selectors.FiltroConsultaInvalido as e:
+        return _error(str(e))
+    return JsonResponse({'status': 'ok', **resultado})
+
+
+@login_required
+def api_inventario_valores(request):
+    """Valores distintos de una columna del Inventario (todos los grabados) para su filtro."""
+    try:
+        resultado = selectors.valores_columna_inventario(request.GET.get('col', ''),
+                                                         request.GET.get('q', '').strip())
+    except selectors.FiltroConsultaInvalido as e:
+        return _error(str(e))
+    return JsonResponse({'status': 'ok', **resultado})
 
 
 @login_required

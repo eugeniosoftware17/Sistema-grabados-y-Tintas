@@ -100,7 +100,7 @@
         $('alta-of').value = '';
         $('alta-proceso').value = '';
         $('alta-proceso').disabled = true;
-        ['alta-cliente', 'alta-referencia', 'alta-sobre'].forEach(id => { $(id).value = ''; });
+        ['alta-cliente', 'alta-referencia', 'alta-sobre', 'alta-ubicacion-sobre'].forEach(id => { $(id).value = ''; });
         ocultar('alta-aviso-externo');
         ocultar('alta-datos-grabado');
         ocultarAccion();
@@ -182,6 +182,9 @@
             });
         $('alta-cliente-obl').style.display = $('alta-cliente').readOnly ? 'none' : 'inline';
         $('alta-referencia-obl').style.display = $('alta-referencia').readOnly ? 'none' : 'inline';
+        // La ubicación del sobre solo se pide en el alta nueva (el sobre se crea con el grabado).
+        $('alta-ubicacion-sobre-caja').style.display = esAltaNueva ? '' : 'none';
+        if (!esAltaNueva) $('alta-ubicacion-sobre').value = '';
         $('alta-datos-grabado').style.display = '';  // vuelve al display: grid del CSS
     }
 
@@ -356,6 +359,7 @@
             cliente: $('alta-cliente').value.trim(),
             referencia: $('alta-referencia').value.trim(),
             sobre: $('alta-sobre').value.trim(),
+            ubicacion_sobre: evaluacion.accion === 'ALTA' ? $('alta-ubicacion-sobre').value.trim() : '',
             tecnicos: {
                 responsables: $('alta-responsables').value.trim(),
                 tiempo: $('alta-tiempo').value,

@@ -313,13 +313,16 @@ def _datos_grabado_nuevo(info_externa, datos_manuales):
 
 
 def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
-                          datos_tecnicos, maquina_id, datos_manuales, usuario, tipo=None):
+                          datos_tecnicos, maquina_id, datos_manuales, usuario, tipo=None,
+                          ubicacion_sobre=None):
     """Registra una fabricación desde la pantalla Crear Grabado. El caso (alta
     nueva, refabricación por K1 rechazado o por REPETIR) lo decide el estado real
     del grabado, no lo que mande el navegador.
     `tipo` (K1 / DIRECTO) solo cuenta en el alta nueva y es obligatorio ahí: un
     DIRECTO queda APROBADO sin K1 y sin máquina. En las refabricaciones se usa el
     tipo que ya tiene el grabado.
+    En el alta nueva se crea también el sobre del grabado, con `ubicacion_sobre`
+    (opcional; si viene, se valida). En las refabricaciones el sobre ya existe.
     Devuelve {'accion', 'grabado', 'fabricacion', 'prueba_k1', 'bano'}."""
     if proceso not in PROCESOS_VALIDOS:
         raise ErrorGrabado('Proceso inválido.')
@@ -346,6 +349,9 @@ def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
                     estado='PENDIENTE_K1' if con_k1 else 'APROBADO',
                     **_datos_grabado_nuevo(info_externa, datos_manuales),
                 )
+                # Import local: services.sobres importa de este módulo.
+                from .sobres import asegurar_sobre
+                asegurar_sobre(grabado, usuario=usuario, ubicacion=ubicacion_sobre)
                 tipo_fabricacion, numero = 'INICIAL', 1
             else:
                 ultimo = grabado.fabricaciones.aggregate(n=Max('numero'))['n'] or 0

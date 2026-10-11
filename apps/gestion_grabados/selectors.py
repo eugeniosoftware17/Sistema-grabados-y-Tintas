@@ -13,7 +13,7 @@ from django.utils import timezone
 from .management.commands.auditar_grabados import normalizar_of, referencia_valida
 from .models import (
     EnvioMaquina, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion, OrdenFabricacion,
-    PruebaK1,
+    PruebaK1, Sobre,
 )
 from .services.grabados import (
     PROCESOS_VALIDOS, es_auto_decision, of_origen_externa, proceso_ausente_en_externo,
@@ -274,18 +274,56 @@ def _filtrar_busqueda(queryset, q):
     return queryset
 
 
-def inventario_grabados(q='', proceso='', estado='', tipo=''):
+# Filtros por columna del Inventario (mismo formato que la Tabla de Consultas, ver
+# _aplicar_filtros_consulta): columna de la pantalla -> campo de Grabado o anotación.
+CAMPOS_INVENTARIO = {
+    'of': 'of_origen', 'proceso': 'proceso', 'cliente': 'cliente', 'referencia': 'referencia',
+    'estado': 'estado', 'tipo': 'tipo', 'intentos': 'intentos_k1', 'ultimo_k1': 'ultimo_k1',
+    'usos': 'usos_acumulados', 'ubicacion': 'ubicacion',
+}
+CAMPOS_FECHA_INVENTARIO = {'modificado': 'actualizado_el__date', 'creado': 'creado_el__date'}
+COLUMNAS_NUMERICAS_INVENTARIO = {'intentos', 'usos'}
+# Columnas que guardan un código: la pantalla muestra el texto pero filtra por el código.
+ETIQUETAS_INVENTARIO = {
+    'estado': dict(Grabado.ESTADO_CHOICES), 'tipo': dict(Grabado.TIPO_CHOICES), 'ultimo_k1': RESULTADOS_K1,
+}
+
+
+def _con_datos_k1(queryset):
+    """Anota intentos_k1 (cuántas PruebaK1) y ultimo_k1 (resultado del último intento).
+    Subconsultas (y no Count + GROUP BY): SQL Server no permite agrupar por una
+    expresión que contenga otra subconsulta."""
+    pruebas = PruebaK1.objects.filter(grabado=OuterRef('pk'))
+    intentos = pruebas.order_by().values('grabado').annotate(n=Count('id')).values('n')
+    ultimo = pruebas.order_by('-intento').values('resultado')[:1]
+    return queryset.annotate(intentos_k1=Coalesce(Subquery(intentos, output_field=IntegerField()), Value(0)),
+                             ultimo_k1=Subquery(ultimo))
+
+
+def _filtrar_columnas_inventario(queryset, filtros):
+    if not filtros:
+        return queryset
+    filtrados = _aplicar_filtros_consulta(_con_datos_k1(queryset), filtros, CAMPOS_INVENTARIO,
+                                          CAMPOS_FECHA_INVENTARIO, COLUMNAS_NUMERICAS_INVENTARIO)
+    # Por id: así los conteos por estado no agrupan sobre las subconsultas de K1.
+    return queryset.filter(pk__in=filtrados.values('pk'))
+
+
+def inventario_grabados(q='', proceso='', estado='', tipo='', filtros=None):
     """Grabados para la pantalla de Inventario.
-    - 'conteos': grabados por estado, respetando búsqueda, proceso y tipo (no el
-      filtro de estado, para que las tarjetas muestren el reparto completo).
+    - 'conteos': grabados por estado, respetando búsqueda, proceso, tipo y filtros por
+      columna (no el filtro de estado de las tarjetas, para mostrar el reparto completo).
     - 'filas': hasta LIMITE_INVENTARIO grabados, del modificado más reciente al
       más viejo (Grabado.actualizado_el).
-    - 'total': cuántos cumplen todos los filtros (puede superar el límite)."""
+    - 'total': cuántos cumplen todos los filtros (puede superar el límite).
+    `filtros`: lista de filtros por columna (ver CAMPOS_INVENTARIO); uno inválido
+    lanza FiltroConsultaInvalido."""
     base = _filtrar_busqueda(Grabado.objects.all(), q)
     if proceso:
         base = base.filter(proceso=proceso)
     if tipo:
         base = base.filter(tipo=tipo)
+    base = _filtrar_columnas_inventario(base, filtros)
 
     conteos = dict.fromkeys(ESTADOS_GRABADO, 0)
     for fila in base.values('estado').annotate(n=Count('id')).order_by():
@@ -294,15 +332,7 @@ def inventario_grabados(q='', proceso='', estado='', tipo=''):
     filtrados = base.filter(estado=estado) if estado else base
     total = filtrados.count()
 
-    # Subconsultas (y no Count + GROUP BY): SQL Server no permite agrupar por
-    # una expresión que contenga otra subconsulta.
-    pruebas = PruebaK1.objects.filter(grabado=OuterRef('pk'))
-    intentos = pruebas.order_by().values('grabado').annotate(n=Count('id')).values('n')
-    ultimo = pruebas.order_by('-intento').values('resultado')[:1]
-
-    filas = (filtrados
-             .annotate(intentos_k1=Coalesce(Subquery(intentos, output_field=IntegerField()), Value(0)),
-                       ultimo_k1=Subquery(ultimo))
+    filas = (_con_datos_k1(filtrados)
              .order_by('-actualizado_el', '-id')
              .values('id', 'of_origen', 'proceso', 'cliente', 'referencia', 'estado', 'tipo',
                      'intentos_k1', 'ultimo_k1', 'usos_acumulados', 'ubicacion', 'creado_el',
@@ -331,6 +361,78 @@ def inventario_grabados(q='', proceso='', estado='', tipo=''):
     } for f in filas]
 
     return {'conteos': conteos, 'total': total, 'limite': LIMITE_INVENTARIO, 'data': datos}
+
+
+def valores_columna_inventario(columna, q=''):
+    """Valores distintos de una columna del Inventario en todos los grabados (respetando
+    la búsqueda), para su filtro: {'valores': [...], 'etiquetas': {código: texto}}.
+    Sin orden: lo ordena la pantalla (que junta None y '' en '—')."""
+    if columna not in CAMPOS_INVENTARIO:
+        raise FiltroConsultaInvalido(f'Columna desconocida: {columna}.')
+    queryset = _filtrar_busqueda(Grabado.objects.all(), q)
+    if columna in ('intentos', 'ultimo_k1'):
+        queryset = _con_datos_k1(queryset)
+    return {'valores': _valores_distintos(queryset, CAMPOS_INVENTARIO[columna]),
+            'etiquetas': ETIQUETAS_INVENTARIO.get(columna, {})}
+
+
+# ============================================================
+# SOBRES
+# ============================================================
+
+LIMITE_SOBRES = 500
+
+
+# Filtros por columna de la pantalla Sobres (mismo formato que el Inventario, ver
+# _aplicar_filtros_consulta): columna de la pantalla -> campo de Sobre.
+CAMPOS_SOBRES = {'of': 'of_origen', 'proceso': 'proceso', 'codigo': 'codigo', 'ubicacion': 'ubicacion',
+                 'estado': 'estado'}
+CAMPOS_FECHA_SOBRES = {'modificado': 'actualizado_el__date'}
+ETIQUETAS_SOBRES = {'estado': dict(Sobre.ESTADO_CHOICES)}
+
+
+def _filtrar_busqueda_sobres(queryset, q):
+    for palabra in (q or '').split():
+        queryset = queryset.filter(Q(of_origen__icontains=palabra) | Q(codigo__icontains=palabra)
+                                   | Q(ubicacion__icontains=palabra))
+    return queryset
+
+
+def lista_sobres(q='', filtros=None):
+    """Sobres para la pantalla Sobres: cada palabra de `q` tiene que aparecer
+    en la OF de origen, el código o la ubicación, y se cumplen los `filtros` por
+    columna (ver CAMPOS_SOBRES; uno inválido lanza FiltroConsultaInvalido). Hasta
+    LIMITE_SOBRES, del modificado más reciente al más viejo; 'total' cuenta todos
+    los que cumplen."""
+    sobres = _filtrar_busqueda_sobres(Sobre.objects.all(), q)
+    sobres = _aplicar_filtros_consulta(sobres, filtros, CAMPOS_SOBRES, CAMPOS_FECHA_SOBRES, set())
+    total = sobres.count()
+    estados_display = dict(Sobre.ESTADO_CHOICES)
+    filas = sobres.select_related('desactivado_por').order_by('-actualizado_el', '-id')[:LIMITE_SOBRES]
+    datos = [{
+        'id': s.id,
+        'of_origen': s.of_origen,
+        'proceso': s.proceso,
+        'codigo': s.codigo,
+        'ubicacion': s.ubicacion,
+        'estado': s.estado,
+        'estado_display': estados_display.get(s.estado, s.estado),
+        'motivo_desactivacion': s.motivo_desactivacion,
+        'desactivado_por': _usuario(s.desactivado_por),
+        'desactivado_el': formatear_fecha(s.desactivado_el),
+        'actualizado_el': formatear_fecha(s.actualizado_el),
+    } for s in filas]
+    return {'total': total, 'limite': LIMITE_SOBRES, 'data': datos}
+
+
+def valores_columna_sobres(columna, q=''):
+    """Valores distintos de una columna de Sobres en todos los sobres (respetando la
+    búsqueda), para su filtro: {'valores': [...], 'etiquetas': {código: texto}}."""
+    if columna not in CAMPOS_SOBRES:
+        raise FiltroConsultaInvalido(f'Columna desconocida: {columna}.')
+    queryset = _filtrar_busqueda_sobres(Sobre.objects.all(), q)
+    return {'valores': _valores_distintos(queryset, CAMPOS_SOBRES[columna]),
+            'etiquetas': ETIQUETAS_SOBRES.get(columna, {})}
 
 
 # ============================================================
@@ -535,12 +637,12 @@ def _grabados_nuevos_base(q=''):
     return queryset
 
 
-def _validar_valores(columna, valores):
+def _validar_valores(columna, valores, numericas=COLUMNAS_NUMERICAS_CONSULTA):
     if not isinstance(valores, list) or not all(isinstance(v, str) for v in valores):
         raise FiltroConsultaInvalido(f'Filtro inválido en {columna}.')
     if len(valores) > MAX_VALORES_FILTRO:
         raise FiltroConsultaInvalido('Demasiados valores marcados; usa la búsqueda para afinar.')
-    if columna in COLUMNAS_NUMERICAS_CONSULTA:
+    if columna in numericas:
         try:
             return [v if v == VACIO_CONSULTA else float(v) for v in valores]
         except ValueError:
@@ -548,24 +650,26 @@ def _validar_valores(columna, valores):
     return valores
 
 
-def _condicion_valores(columna, campo, valores):
+def _condicion_valores(columna, campo, valores, numericas=COLUMNAS_NUMERICAS_CONSULTA):
     """Q de las filas cuyo valor mostrado en `columna` está en `valores` (textos de pantalla)."""
     condicion = Q(pk__in=[])
     reales = [v for v in valores if v != VACIO_CONSULTA]
     if VACIO_CONSULTA in valores:
         condicion |= Q(**{f'{campo}__isnull': True})
-        if columna not in COLUMNAS_NUMERICAS_CONSULTA:
+        if columna not in numericas:
             condicion |= Q(**{campo: ''})
     if reales:
         condicion |= Q(**{f'{campo}__in': reales})
     return condicion
 
 
-def _aplicar_filtros_consulta(queryset, filtros, campos=CAMPOS_CONSULTA, campos_fecha=CAMPOS_FECHA_CONSULTA):
+def _aplicar_filtros_consulta(queryset, filtros, campos=CAMPOS_CONSULTA, campos_fecha=CAMPOS_FECHA_CONSULTA,
+                              numericas=COLUMNAS_NUMERICAS_CONSULTA):
     """`filtros` = lista de {'col': columna, 'in': [...]} | {'col', 'fuera': [...]} |
     {'col', 'desde': 'aaaa-mm-dd', 'hasta': ...}; se cumplen todos (una columna puede
     repetirse, ej. el filtro de Estado del panel y el de la columna).
-    `campos`/`campos_fecha` traducen cada columna al campo del modelo o a una Constante."""
+    `campos`/`campos_fecha` traducen cada columna al campo del modelo o a una Constante;
+    `numericas` son las columnas cuyos valores llegan como número (también la usa el Inventario)."""
     if not isinstance(filtros or [], list):
         raise FiltroConsultaInvalido('Filtros inválidos.')
     for filtro in filtros or []:
@@ -594,14 +698,14 @@ def _aplicar_filtros_consulta(queryset, filtros, campos=CAMPOS_CONSULTA, campos_
         if columna not in campos:
             raise FiltroConsultaInvalido(f'Columna desconocida: {columna}.')
         incluir, excluir = filtro.get('in'), filtro.get('fuera')
-        valores = _validar_valores(columna, incluir if incluir is not None else excluir)
+        valores = _validar_valores(columna, incluir if incluir is not None else excluir, numericas)
         campo = campos[columna]
         if isinstance(campo, Constante):
             mostrado = campo.valor if campo.valor not in (None, '') else VACIO_CONSULTA
             if (mostrado in valores) != (incluir is not None):
                 queryset = queryset.none()
             continue
-        condicion = _condicion_valores(columna, campo, valores)
+        condicion = _condicion_valores(columna, campo, valores, numericas)
         queryset = queryset.filter(condicion) if incluir is not None else queryset.exclude(condicion)
     return queryset
 

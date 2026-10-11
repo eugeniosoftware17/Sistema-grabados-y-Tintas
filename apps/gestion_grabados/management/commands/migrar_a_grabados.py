@@ -21,6 +21,9 @@ que tenga ubicación, en mayúsculas y sin espacios sobrantes (sin validar el fo
 máquina trae una ubicación (ej. 'GBB-1-3'), no se crea esa máquina: el envío va a
 "SIN MÁQUINA (LEGADO)" y, si la fila no tenía ubicación, se usa ese valor.
 
+Sobre: cada grabado migrado (nuevo o reutilizado sin sobre) queda con su Sobre
+(services.sobres.asegurar_sobre: código limpio a partir del sobre, sin ubicación).
+
 Uso:
     python manage.py migrar_a_grabados                 # simulación
     python manage.py migrar_a_grabados --limite 0      # simulación, listas completas en pantalla
@@ -46,6 +49,7 @@ from apps.gestion_grabados.services.grabados import (
     PATRON_UBICACION, PROCESOS_VALIDOS, ErrorGrabado, calcular_bano_ml, datos_externos_utiles,
     normalizar_nombre_maquina, validar_ubicacion,
 )
+from apps.gestion_grabados.services.sobres import asegurar_sobre
 
 # Estado del grabado según el estado de la fila legada más reciente (regla 3).
 ESTADO_GRABADO = {
@@ -397,6 +401,7 @@ class Command(BaseCommand):
         self.estados_nuevos = Counter()
         self.fabricaciones = Counter()
         self.envios = Counter()
+        self.sobres_creados = 0
 
         for f in self.sin_grupo:
             self.enlazar(f, 'SIN_MIGRAR')
@@ -456,6 +461,9 @@ class Command(BaseCommand):
             Grabado.objects.filter(pk=grabado.pk).update(creado_el=migrables[0]['creado_el'])
             numero = 0
             self.contar_ubicacion(clave, migrables, grabado.ubicacion)
+
+        if getattr(asegurar_sobre(grabado), 'creado', False):
+            self.sobres_creados += 1
 
         hay_inicial = False
         pendiente_repeticion = False
@@ -625,6 +633,7 @@ class Command(BaseCommand):
         self.r.titulo('9. CONTEOS FINALES' + ('' if self.aplicar else ' (simulados)'))
         self.r.conteo('Grabados nuevos', getattr(self, 'grabados_nuevos', 0))
         self.r.conteo('Grabados reutilizados', getattr(self, 'grabados_reutilizados', 0))
+        self.r.conteo('Sobres creados', getattr(self, 'sobres_creados', 0))
         maquinas_creadas = getattr(self, 'maquinas_creadas', [])
         self.r.conteo('Máquinas creadas en el catálogo', len(maquinas_creadas))
         self.r.lista(maquinas_creadas)

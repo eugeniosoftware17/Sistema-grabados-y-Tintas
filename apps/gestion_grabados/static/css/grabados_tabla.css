@@ -551,6 +551,67 @@
       padding-bottom: 8px;
     }
 
+    /* Componente FiltroColumna (static/js/componentes/filtro_columna.js):
+       Inventario, Sobres y PLANI. Punto naranja = columna filtrada. */
+    .fc-punto {
+      display      : none;
+      width        : 6px;
+      height       : 6px;
+      border-radius: 50%;
+      background   : #f39c12;
+      margin-left  : 1px;
+      vertical-align: middle;
+    }
+    .fc-punto.activo { display: inline-block; }
+
+    .fc-quitar {
+      display      : none;
+      border       : none;
+      background   : #fff3e0;
+      color        : #b35c00;
+      border-radius: 999px;
+      padding      : 5px 12px;
+      cursor       : pointer;
+      font-size    : 12px;
+      font-weight  : 600;
+      font-family  : inherit;
+    }
+    .fc-quitar.activo { display: inline-block; }
+
+    .fc-buscador {
+      position     : sticky;
+      top          : 0;
+      background   : #fff;
+      padding      : 6px 14px;
+      border-bottom: 1px solid var(--color-borde);
+    }
+    .fc-buscador input,
+    .fc-fechas input {
+      width        : 100%;
+      box-sizing   : border-box;
+      padding      : 5px 8px;
+      border       : 1px solid var(--color-borde);
+      border-radius: 6px;
+      font-size    : 12px;
+      font-family  : inherit;
+    }
+    .fc-fechas { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .fc-fechas label { font-size: 11px; font-weight: 600; color: var(--color-texto-suave); }
+    .fc-fechas input { display: block; margin-top: 4px; }
+    .fc-mensaje { padding: 12px 14px; font-size: 12px; color: var(--color-texto-suave); }
+
+    /* Texto largo (cliente, descripción, ...): una sola línea con "..." para que
+       todas las filas tengan el mismo alto; el texto completo va en el title.
+       En celular (tarjetas) vuelve a partirse en varias líneas, ver más abajo. */
+    .celda-texto {
+      display      : block;
+      min-width    : 0;
+      max-width    : 220px;
+      overflow     : hidden;
+      text-overflow: ellipsis;
+      white-space  : nowrap;
+    }
+
     /* Filas del cuerpo */
     .tabla-registros tbody tr {
       border-bottom: 1px solid var(--color-borde);
@@ -1126,6 +1187,14 @@
 
       .tabla-registros tbody td:last-child {
         border-bottom: none;
+      }
+
+      /* En la tarjeta hay espacio a lo ancho: el texto largo se ve completo. */
+      .tabla-registros tbody td .celda-texto {
+        max-width  : none;
+        min-width  : 0;
+        white-space: normal;
+        overflow-wrap: anywhere;
       }
 
       /* La etiqueta se toma del atributo data-label del td */

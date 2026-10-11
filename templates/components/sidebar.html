@@ -126,6 +126,11 @@
             >Inventario de Grabados</a
           >
           <a
+            href="{% url 'grabados:sobres' %}"
+            class="sb-subitem {% if view_name == 'grabados:sobres' %}sb-subitem--active{% endif %}"
+            >Sobres</a
+          >
+          <a
             href="{% url 'grabados:k1_pendientes' %}"
             class="sb-subitem {% if view_name == 'grabados:k1_pendientes' %}sb-subitem--active{% endif %}"
             >K1 Pendientes</a
