@@ -15,7 +15,7 @@ from io import StringIO
 from unittest import mock
 
 import pandas as pd
-from django.contrib.auth.models import Group, User
+from django.contrib.auth.models import Group, Permission, User
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import Client, TestCase, override_settings
@@ -29,7 +29,7 @@ from apps.gestion_grabados.models import (
 from apps.gestion_grabados.services import grabados as servicio
 from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
 
-GRUPO_SUPERVISORES = 'Supervisores de Producción'
+GRUPO_GRABADOS = 'Grabados'
 RUTA_BUSCAR_EXTERNOS = 'apps.gestion_grabados.views_grabados.buscar_datos_externos'
 
 
@@ -61,9 +61,13 @@ class BaseGrabados(TestCase):
     def setUpTestData(cls):
         cls.maquina = Maquina.objects.create(nombre='GIETZ 01')
         cls.maquina_inactiva = Maquina.objects.create(nombre='GIETZ 99', activa=False)
+        # operario y supervisor: usuarios comunes con acceso al módulo (grupo Grabados).
+        grupo = Group.objects.get(name=GRUPO_GRABADOS)
         cls.operario = User.objects.create_user('operario', password='x')
         cls.supervisor = User.objects.create_user('supervisor', password='x')
-        cls.supervisor.groups.add(Group.objects.get(name=GRUPO_SUPERVISORES))
+        cls.operario.groups.add(grupo)
+        cls.supervisor.groups.add(grupo)
+        cls.sin_acceso = User.objects.create_user('sin_acceso', password='x')
         cls.admin = User.objects.create_superuser('admin', password='x')
 
     def registrar(self, of='22741', proceso='STAMPING', info=None, usuario=None,
@@ -360,21 +364,27 @@ class DecidirK1Tests(BaseGrabados):
             servicio.decidir_k1(prueba_id=self.prueba.id, usuario=self.admin,
                                 aprobar=False, motivo='Cambio de opinión')
 
-    def test_supervisor_no_superusuario_no_decide_su_propia_fabricacion(self):
-        prueba = self.registrar(of='31000', usuario=self.supervisor)['prueba_k1']
-        self.assertFalse(servicio.puede_decidir_k1(self.supervisor, prueba))
-        with self.assertRaises(servicio.AutoDecisionProhibida):
-            servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor, aprobar=True)
-        with self.assertRaises(servicio.AutoDecisionProhibida):
-            servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor,
-                                aprobar=False, motivo='Rechazo propio')
+    def test_usuario_comun_aprueba_su_propia_fabricacion(self):
+        prueba = self.registrar(of='31000', usuario=self.operario)['prueba_k1']
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.operario, aprobar=True)
         prueba.refresh_from_db()
-        self.assertEqual(prueba.resultado, 'PENDIENTE')
-        self.assertIsNone(prueba.decidido_por)
+        self.assertEqual(prueba.resultado, 'APROBADO')
+        self.assertEqual(prueba.decidido_por, self.operario)
+        self.assertIsNotNone(prueba.decidido_el)
+        self.assertTrue(servicio.es_auto_decision(prueba))
+        self.assertEqual(prueba.grabado.estado, 'APROBADO')
+
+    def test_usuario_comun_rechaza_su_propia_fabricacion(self):
+        prueba = self.registrar(of='31500', usuario=self.operario)['prueba_k1']
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.operario,
+                            aprobar=False, motivo='Rechazo propio')
+        prueba.refresh_from_db()
+        self.assertEqual((prueba.resultado, prueba.decidido_por), ('RECHAZADO', self.operario))
+        self.assertTrue(servicio.es_auto_decision(prueba))
+        self.assertEqual(prueba.grabado.estado, 'EN_FABRICACION')
 
     def test_superusuario_aprueba_su_propia_fabricacion(self):
         prueba = self.registrar(of='32000', usuario=self.admin)['prueba_k1']
-        self.assertTrue(servicio.puede_decidir_k1(self.admin, prueba))
         servicio.decidir_k1(prueba_id=prueba.id, usuario=self.admin, aprobar=True)
         prueba.refresh_from_db()
         self.assertEqual(prueba.resultado, 'APROBADO')
@@ -395,9 +405,6 @@ class DecidirK1Tests(BaseGrabados):
         servicio.decidir_k1(prueba_id=self.prueba.id, usuario=self.admin, aprobar=True)
         self.prueba.refresh_from_db()
         self.assertFalse(servicio.es_auto_decision(self.prueba))
-
-    def test_sin_permiso_nadie_puede_decidir(self):
-        self.assertFalse(servicio.puede_decidir_k1(self.operario, self.prueba))
 
     def test_k1_inexistente(self):
         with self.assertRaisesMessage(servicio.ErrorGrabado, 'no existe'):
@@ -576,12 +583,8 @@ class VistasK1Tests(BaseGrabados):
     def setUp(self):
         self.prueba = self.registrar()['prueba_k1']
 
-    def test_grupo_supervisores_tiene_el_permiso(self):
-        grupo = Group.objects.get(name=GRUPO_SUPERVISORES)
-        self.assertTrue(grupo.permissions.filter(codename='decidir_pruebak1').exists())
-
-    def test_sin_permiso_no_entra(self):
-        self.client.force_login(self.operario)
+    def test_sin_acceso_al_modulo_no_entra(self):
+        self.client.force_login(self.sin_acceso)
         self.assertEqual(self.client.get(reverse('grabados:k1_pendientes')).status_code, 403)
         self.assertEqual(self.client.get(reverse('grabados:api_k1_pendientes')).status_code, 403)
         respuesta = self.client.post(reverse('grabados:api_k1_aprobar', args=[self.prueba.id]),
@@ -590,12 +593,10 @@ class VistasK1Tests(BaseGrabados):
         self.prueba.refresh_from_db()
         self.assertEqual(self.prueba.resultado, 'PENDIENTE')
 
-    def test_menu_muestra_k1_solo_con_permiso(self):
-        url_k1 = reverse('grabados:k1_pendientes')
+    def test_menu_muestra_k1_a_cualquier_usuario_del_modulo(self):
         self.client.force_login(self.operario)
-        self.assertNotContains(self.client.get(reverse('grabados:alta_grabado')), url_k1)
-        self.client.force_login(self.supervisor)
-        self.assertContains(self.client.get(reverse('grabados:alta_grabado')), url_k1)
+        self.assertContains(self.client.get(reverse('grabados:alta_grabado')),
+                            reverse('grabados:k1_pendientes'))
 
     def test_supervisor_lista_y_aprueba(self):
         self.client.force_login(self.supervisor)
@@ -605,7 +606,6 @@ class VistasK1Tests(BaseGrabados):
         self.assertEqual(len(datos), 1)
         self.assertEqual(datos[0]['of'], '22741')
         self.assertEqual(datos[0]['registrado_por'], 'operario')
-        self.assertFalse(datos[0]['es_propio'])
         self.assertEqual(datos[0]['grabado_id'], self.prueba.grabado_id)
         self.assertNotIn('peso_inicial', datos[0])  # los datos técnicos van en el detalle
 
@@ -625,25 +625,34 @@ class VistasK1Tests(BaseGrabados):
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(Grabado.objects.get().estado, 'EN_FABRICACION')
 
-    def test_auto_aprobacion_de_supervisor_por_api_da_mensaje_claro(self):
-        propia = self.registrar(of='30000', usuario=self.supervisor)['prueba_k1']
-        self.client.force_login(self.supervisor)
-        datos = {d['id']: d for d in self.client.get(reverse('grabados:api_k1_pendientes')).json()['data']}
-        self.assertTrue(datos[propia.id]['es_propio'])
-        self.assertFalse(datos[propia.id]['puede_decidir'])
-        self.assertTrue(datos[self.prueba.id]['puede_decidir'])  # el de otro sí
+    def test_usuario_comun_aprueba_su_propio_k1_por_api(self):
+        # self.prueba la registró operario: él mismo la aprueba, sin bloqueo.
+        self.client.force_login(self.operario)
+        datos = self.client.get(reverse('grabados:api_k1_pendientes')).json()['data']
+        self.assertNotIn('puede_decidir', datos[0])
+        self.assertNotIn('es_propio', datos[0])
 
-        respuesta = self.client.post(reverse('grabados:api_k1_aprobar', args=[propia.id]),
+        respuesta = self.client.post(reverse('grabados:api_k1_aprobar', args=[self.prueba.id]),
                                      data='{}', content_type='application/json')
-        self.assertEqual(respuesta.status_code, 403)
-        self.assertIn('registraste tú', respuesta.json()['message'])
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.prueba.refresh_from_db()
+        self.assertEqual((self.prueba.resultado, self.prueba.decidido_por), ('APROBADO', self.operario))
+        self.assertIsNotNone(self.prueba.decidido_el)
+
+        # En el detalle queda como "Auto-aprobado".
+        detalle = self.client.get(reverse('grabados:api_grabado_detalle', args=[self.prueba.grabado_id]))
+        intento = detalle.json()['data']['pruebas_k1'][0]
+        self.assertEqual((intento['decidido_por'], intento['auto_decision']), ('operario', True))
+
+    def test_pagina_k1_sin_aviso_de_supervisor(self):
+        self.client.force_login(self.operario)
+        respuesta = self.client.get(reverse('grabados:k1_pendientes'))
+        self.assertNotContains(respuesta, 'modal-aviso-propio')
+        self.assertNotContains(respuesta, 'supervisor')
 
     def test_superusuario_decide_su_propio_k1_por_api(self):
         propia = self.registrar(of='30001', usuario=self.admin)['prueba_k1']
         self.client.force_login(self.admin)
-        datos = {d['id']: d for d in self.client.get(reverse('grabados:api_k1_pendientes')).json()['data']}
-        self.assertTrue(datos[propia.id]['es_propio'])
-        self.assertTrue(datos[propia.id]['puede_decidir'])
 
         respuesta = self.client.post(reverse('grabados:api_k1_rechazar', args=[propia.id]),
                                      data=json.dumps({'motivo': 'Lo rechazo yo mismo'}),
@@ -662,7 +671,8 @@ class DetalleGrabadoTests(BaseGrabados):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.consulta = User.objects.create_user('consulta', password='x')  # sin permiso de K1
+        cls.consulta = User.objects.create_user('consulta', password='x')
+        cls.consulta.groups.add(Group.objects.get(name=GRUPO_GRABADOS))
 
     def setUp(self):
         # Fabricación 1 -> K1 1 rechazado -> fabricación 2 -> K1 2 pendiente.
@@ -699,11 +709,11 @@ class DetalleGrabadoTests(BaseGrabados):
         self.assertEqual(respuesta.status_code, 405)
         self.assertEqual(PruebaK1.objects.get(pk=self.k1_pendiente.pk).resultado, 'PENDIENTE')
 
-    def test_no_requiere_permiso_de_k1(self):
+    def test_cualquier_usuario_del_modulo_lo_ve(self):
         d = self.detalle(self.consulta)
         self.assertEqual(d['of_origen'], '22741')
-        self.assertFalse(d['k1_actual']['puede_decidir'])
-        self.assertFalse(d['k1_actual']['es_propio'])
+        self.assertEqual(d['k1_actual']['id'], self.k1_pendiente.id)
+        self.assertNotIn('puede_decidir', d['k1_actual'])
 
     def test_datos_generales(self):
         d = self.detalle(self.supervisor)
@@ -730,25 +740,16 @@ class DetalleGrabadoTests(BaseGrabados):
         self.assertEqual(k1['id'], self.k1_pendiente.id)
         self.assertEqual((k1['intento'], k1['maquina'], k1['resultado']), (2, 'GIETZ 01', 'PENDIENTE'))
         self.assertEqual(k1['creado_por'], 'operario')
-        self.assertTrue(k1['puede_decidir'])
         self.assertEqual(k1['fabricacion']['numero'], 2)
         tecnicos = k1['fabricacion']['tecnicos']
         self.assertEqual((tecnicos['peso_inicial'], tecnicos['peso_final'], tecnicos['perdida']), (5000, 4000, 1000))
         self.assertEqual((tecnicos['temp'], tecnicos['rpm']), (160, 900))
         self.assertAlmostEqual(tecnicos['bano_ml'], 6.6)
 
-    def test_quien_registro_no_puede_decidir(self):
-        k1 = self.detalle(self.operario)['k1_actual']
-        self.assertTrue(k1['es_propio'])
-        self.assertFalse(k1['puede_decidir'])
-
-    def test_superusuario_autor_puede_decidir_y_queda_como_auto_decision(self):
+    def test_superusuario_autor_decide_y_queda_como_auto_decision(self):
         prueba = self.registrar(of='34000', usuario=self.admin)['prueba_k1']
         self.client.force_login(self.admin)
         url = reverse('grabados:api_grabado_detalle', args=[prueba.grabado_id])
-        k1 = self.client.get(url).json()['data']['k1_actual']
-        self.assertTrue(k1['es_propio'])
-        self.assertTrue(k1['puede_decidir'])
 
         servicio.decidir_k1(prueba_id=prueba.id, usuario=self.admin, aprobar=True)
         intentos = self.client.get(url).json()['data']['pruebas_k1']
@@ -1259,6 +1260,146 @@ class LimpiarTextoExcelTests(TestCase):
     def test_lo_que_no_es_texto_queda_igual(self):
         for valor in (22741, 2.5, None):
             self.assertEqual(limpiar_texto_excel(valor), valor)
+
+
+# ============================================================
+# PERMISOS POR ÁREA (módulo Grabados, ver apps/core/permisos.py)
+# ============================================================
+
+class PermisosModuloGrabadosTests(BaseGrabados):
+
+    PAGINAS = ('alta_grabado', 'k1_pendientes', 'inventario_grabados', 'plani_consulta',
+               'grabado_consulta', 'grabado_estadisticas')
+
+    def rutas(self):
+        """(nombre, url) de TODAS las rutas del módulo, con valores de relleno
+        para los parámetros: así una ruta nueva queda cubierta sin tocar el test."""
+        from apps.gestion_grabados.urls import urlpatterns
+        for patron in urlpatterns:
+            kwargs = {nombre: 1 for nombre in patron.pattern.converters}
+            yield patron.name, reverse(f'grabados:{patron.name}', kwargs=kwargs)
+
+    def test_sin_acceso_todas_las_rutas_dan_403(self):
+        self.client.force_login(self.sin_acceso)
+        prueba = self.registrar()['prueba_k1']
+        for nombre, url in self.rutas():
+            for metodo in ('get', 'post'):
+                with self.subTest(ruta=nombre, metodo=metodo):
+                    respuesta = getattr(self.client, metodo)(url)
+                    self.assertEqual(respuesta.status_code, 403)
+                    if '/api/' in url:
+                        self.assertEqual(respuesta.json()['status'], 'error')
+                    else:
+                        self.assertTemplateUsed(respuesta, '403.html')
+        prueba.refresh_from_db()
+        self.assertEqual(prueba.resultado, 'PENDIENTE')   # nada se decidió
+
+    def test_sin_sesion_todas_las_rutas_mandan_al_login(self):
+        for nombre, url in self.rutas():
+            with self.subTest(ruta=nombre):
+                respuesta = self.client.get(url)
+                self.assertEqual(respuesta.status_code, 302)
+                self.assertIn('login', respuesta['Location'])
+
+    def test_con_acceso_entra_a_las_pantallas(self):
+        self.client.force_login(self.operario)
+        for nombre in self.PAGINAS:
+            with self.subTest(pantalla=nombre):
+                self.assertEqual(self.client.get(reverse(f'grabados:{nombre}')).status_code, 200)
+        self.assertEqual(self.client.get(reverse('grabados:api_inventario')).status_code, 200)
+        self.assertEqual(self.client.get(reverse('grabados:api_k1_pendientes')).status_code, 200)
+
+    def test_superusuario_entra_sin_estar_en_el_grupo(self):
+        self.assertFalse(self.admin.groups.exists())
+        self.client.force_login(self.admin)
+        for nombre in self.PAGINAS:
+            with self.subTest(pantalla=nombre):
+                self.assertEqual(self.client.get(reverse(f'grabados:{nombre}')).status_code, 200)
+        prueba = self.registrar()['prueba_k1']
+        respuesta = self.client.post(reverse('grabados:api_k1_aprobar', args=[prueba.id]),
+                                     data='{}', content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+
+    def test_menu_con_solo_grabados(self):
+        self.client.force_login(self.operario)
+        respuesta = self.client.get(reverse('core:dashboard'))
+        self.assertContains(respuesta, 'Gestión de Grabados')
+        self.assertContains(respuesta, reverse('grabados:k1_pendientes'))
+        for oculto in ('Gestión de Tintas', 'Gestión de TI', '<span>Configuración</span>',
+                       '<span>Usuarios</span>', '<span>Reportes</span>', 'Tintas disponibles'):
+            with self.subTest(oculto=oculto):
+                self.assertNotContains(respuesta, oculto)
+
+    def test_menu_sin_ningun_modulo(self):
+        self.client.force_login(self.sin_acceso)
+        respuesta = self.client.get(reverse('core:dashboard'))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotContains(respuesta, 'Gestión de Grabados')
+        self.assertNotContains(respuesta, '/grabados/')
+
+    def test_menu_del_superusuario_tiene_todo(self):
+        self.client.force_login(self.admin)
+        respuesta = self.client.get(reverse('core:dashboard'))
+        for visible in ('Gestión de Grabados', 'Gestión de Tintas', 'Gestión de TI',
+                        '<span>Configuración</span>', '<span>Usuarios</span>', '<span>Reportes</span>'):
+            with self.subTest(visible=visible):
+                self.assertContains(respuesta, visible)
+
+    def test_eliminar_sigue_exigiendo_is_staff(self):
+        OrdenFabricacion.objects.create(of='22741', proceso='STAMPING')
+        url = reverse('grabados:api_eliminar')
+        datos = json.dumps({'of': '22741', 'proceso': 'STAMPING'})
+
+        self.client.force_login(self.operario)   # con acceso al módulo, sin is_staff
+        respuesta = self.client.post(url, data=datos, content_type='application/json')
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertIn('eliminar', respuesta.json()['message'])
+        self.assertTrue(OrdenFabricacion.objects.exists())
+
+        staff_sin_modulo = User.objects.create_user('staff_sin_modulo', password='x', is_staff=True)
+        self.client.force_login(staff_sin_modulo)
+        self.assertEqual(self.client.post(url, data=datos, content_type='application/json').status_code, 403)
+        self.assertTrue(OrdenFabricacion.objects.exists())
+
+        self.supervisor.is_staff = True
+        self.supervisor.save()
+        self.client.force_login(self.supervisor)
+        respuesta = self.client.post(url, data=datos, content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertFalse(OrdenFabricacion.objects.exists())
+
+    def test_grupo_grabados_y_supervisores_eliminado(self):
+        grupo = Group.objects.get(name=GRUPO_GRABADOS)
+        self.assertTrue(grupo.permissions.filter(codename='acceso_grabados',
+                                                 content_type__app_label='core').exists())
+        self.assertFalse(Group.objects.filter(name='Supervisores de Producción').exists())
+        self.assertFalse(Permission.objects.filter(codename='decidir_pruebak1').exists())
+
+    def test_migracion_mete_en_el_grupo_a_activos_y_supervisores(self):
+        from importlib import import_module
+        from types import SimpleNamespace
+        from django.apps import apps as django_apps
+        from django.db import connection
+
+        migracion = import_module('apps.core.migrations.0002_grupo_grabados')
+        activo = User.objects.create_user('activo', password='x')
+        inactivo = User.objects.create_user('inactivo', password='x', is_active=False)
+        supervisor_inactivo = User.objects.create_user('sup_inactivo', password='x', is_active=False)
+        supervisor_inactivo.groups.add(Group.objects.create(name='Supervisores de Producción'))
+
+        config_core = django_apps.get_app_config('core')
+        models_module = config_core.models_module
+        try:
+            migracion.crear_grupo_grabados(django_apps, SimpleNamespace(connection=connection))
+        finally:
+            config_core.models_module = models_module
+
+        miembros = set(Group.objects.get(name=GRUPO_GRABADOS).user_set.values_list('username', flat=True))
+        self.assertIn('activo', miembros)
+        self.assertIn('sup_inactivo', miembros)
+        self.assertNotIn('inactivo', miembros)
+        self.assertTrue(activo.has_perm('core.acceso_grabados'))
+        self.assertFalse(User.objects.get(pk=inactivo.pk).groups.exists())
 
 
 class FabricacionRetiradaTests(BaseGrabados):

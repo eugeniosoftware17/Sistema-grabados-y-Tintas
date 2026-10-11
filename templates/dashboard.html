@@ -14,16 +14,23 @@
     </div>
 
     <!-- Fila 2: dos cards -->
+    {# Tarjetas por módulo: cada una solo con el acceso a su área (ver apps/core/permisos.py). #}
+    {% if perms.core.acceso_grabados or request.user.is_superuser %}
     <div class="dash-row">
+        {% if perms.core.acceso_grabados %}
         <div class="dash-card">
             <div class="card-label">Grabados hoy</div>
             <div class="card-value">--</div>
         </div>
+        {% endif %}
+        {% if request.user.is_superuser %}
         <div class="dash-card">
             <div class="card-label">Tintas disponibles</div>
             <div class="card-value">--</div>
         </div>
+        {% endif %}
     </div>
+    {% endif %}
 
     <!-- Fila 3: card alta -->
     <div class="dash-card card-wide card-tall">

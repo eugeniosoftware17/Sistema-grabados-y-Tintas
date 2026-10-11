@@ -57,9 +57,17 @@
       </a>
     </div>
 
+    {% comment %}
+      Cada módulo se muestra solo con su permiso de acceso (core.AccesoModulo,
+      ver apps/core/permisos.py). Los superusuarios tienen todos. Los módulos que
+      todavía no tienen permiso propio (Tintas, TI, Administración) solo los ve
+      el superusuario.
+    {% endcomment %}
+    {% if perms.core.acceso_grabados or request.user.is_superuser %}
     <div class="sb-section">
       <div class="sb-section-title">Operaciones</div>
 
+      {% if perms.core.acceso_grabados %}
       <div class="sb-item-group">
         <a
           href="#"
@@ -117,16 +125,16 @@
             class="sb-subitem {% if view_name == 'grabados:inventario_grabados' %}sb-subitem--active{% endif %}"
             >Inventario de Grabados</a
           >
-          {% if perms.gestion_grabados.decidir_pruebak1 %}
           <a
             href="{% url 'grabados:k1_pendientes' %}"
             class="sb-subitem {% if view_name == 'grabados:k1_pendientes' %}sb-subitem--active{% endif %}"
             >K1 Pendientes</a
           >
-          {% endif %}
         </div>
       </div>
+      {% endif %}
 
+      {% if request.user.is_superuser %}
       <div class="sb-item-group">
         <a
           href="#"
@@ -161,8 +169,11 @@
           <a href="#" class="sb-subitem">Inventario</a>
         </div>
       </div>
+      {% endif %}
     </div>
+    {% endif %}
 
+    {% if request.user.is_superuser %}
     <div class="sb-section">
       <div class="sb-section-title">Administración</div>
       <a href="#" class="sb-item">
@@ -178,6 +189,7 @@
         <span>Reportes</span>
       </a>
     </div>
+    {% endif %}
 
     {% endwith %}
   </div>

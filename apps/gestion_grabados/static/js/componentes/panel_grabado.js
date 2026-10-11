@@ -15,10 +15,8 @@
      PanelGrabado.recargar();
 
    Los botones Aprobar/Rechazar solo aparecen si la pantalla pasa `acciones`
-   y el servidor dice que el usuario puede decidir (k1_actual.puede_decidir);
-   la regla real se valida igual en el servidor al decidir. Si además
-   k1_actual.es_propio (superusuario sobre su propia fabricación), la pantalla
-   debe pedir confirmación antes de decidir: el callback recibe k1.es_propio.
+   y el grabado tiene un K1 pendiente (k1_actual). Cualquier usuario del
+   módulo puede decidir, incluso sobre una fabricación que registró él.
    ============================================================ */
 
 (function () {
@@ -215,18 +213,6 @@
         const acciones = opcionesActuales.acciones;
         const k1 = d.k1_actual;
         if (!acciones || !k1) return;
-
-        if (!k1.puede_decidir) {
-            if (k1.es_propio) {
-                pie.innerHTML = '<div class="pg-aviso-propio">Registraste esta fabricación: el K1 lo tiene que decidir otro supervisor.</div>';
-            }
-            return;
-        }
-        if (k1.es_propio) {
-            // Solo llega aquí un superusuario: puede decidir, pero se le avisa.
-            pie.innerHTML = '<div class="pg-aviso-propio pg-aviso-propio--info">Registraste esta fabricación. ' +
-                'Como administrador puedes decidirla; quedará registrado que la decisión fue tuya.</div>';
-        }
 
         const rechazar = document.createElement('button');
         rechazar.type = 'button';

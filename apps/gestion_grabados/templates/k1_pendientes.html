@@ -17,8 +17,6 @@
     .boton--aprobar { background: #2d8a3e; color: white; }
     .boton--rechazar { background: #d32f2f; color: white; }
     .boton--detalle { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; }
-    .k1-propio { font-size: 11px; color: #8a6100; background: #fff8e1; border: 1px solid #ffe082;
-                 border-radius: 6px; padding: 4px 8px; display: inline-block; max-width: 180px; }
 
     /* Celular: cada fila es una tarjeta (la base está en grabados_tabla.css,
        que usa el data-label de cada td); aquí se evita que el texto largo o
@@ -30,7 +28,6 @@
         .tabla-registros tbody td.k1-celda-acciones { display: block; text-align: left; }
         .tabla-registros tbody td.k1-celda-acciones::before { display: block; margin-bottom: 6px; }
         .k1-acciones .boton { flex: 1 1 auto; padding: 9px 10px; font-size: 13px; }
-        .k1-propio { max-width: none; display: block; }
     }
 </style>
 {% endblock %}
@@ -45,7 +42,7 @@
           </svg>
           K1 Pendientes
         </h1>
-        <p class="pagina-descripcion">Pruebas K1 que esperan la decisión de un supervisor.</p>
+        <p class="pagina-descripcion">Pruebas K1 que esperan aprobación o rechazo.</p>
       </div>
       <div class="tabla-cabecera__contador" id="k1-contador"></div>
     </header>
@@ -88,23 +85,6 @@
       <div class="dashboard-pie">
         <button type="button" class="boton boton--cancelar" onclick="cerrarModalRechazo()">Cancelar</button>
         <button type="button" class="boton boton--rechazar" id="rechazo-btn-confirmar" onclick="confirmarRechazo()">Rechazar K1</button>
-      </div>
-    </div>
-  </div>
-
-<!-- AVISO: superusuario decidiendo sobre su propia fabricación -->
-  <div id="modal-aviso-propio" class="overlay-moderno" style="display:none;">
-    <div class="dashboard-card" style="max-width: 480px;" role="alertdialog" aria-modal="true"
-         aria-labelledby="aviso-propio-titulo" aria-describedby="aviso-propio-texto">
-      <div class="dashboard-cabecera" style="background: #b26a00;">
-        <h3 id="aviso-propio-titulo">Decisión sobre tu propia fabricación</h3>
-      </div>
-      <div class="dashboard-cuerpo">
-        <p id="aviso-propio-texto" style="margin: 0; font-size: 15px; line-height: 1.5;"></p>
-      </div>
-      <div class="dashboard-pie">
-        <button type="button" class="boton boton--cancelar" id="aviso-propio-cancelar">Cancelar</button>
-        <button type="button" class="boton boton--guardar" id="aviso-propio-confirmar">Confirmar</button>
       </div>
     </div>
   </div>

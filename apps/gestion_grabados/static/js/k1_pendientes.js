@@ -1,5 +1,5 @@
 /* ============================================================
-   K1 Pendientes (supervisores) — ver views_grabados.py
+   K1 Pendientes — ver views_grabados.py
    El reporte completo del grabado se muestra con el componente
    reutilizable PanelGrabado (static/js/componentes/panel_grabado.js).
    ============================================================ */
@@ -26,10 +26,6 @@
 
     function acciones(p) {
         const detalle = `<button type="button" class="boton boton--detalle" data-accion="detalle" data-id="${p.id}">Ver detalle</button>`;
-        if (!p.puede_decidir) {
-            return `<div class="k1-acciones">${detalle}</div>
-                <span class="k1-propio" style="margin-top:5px;">Registraste esta fabricación: la tiene que decidir otro supervisor.</span>`;
-        }
         return `
             <div class="k1-acciones">
                 ${detalle}
@@ -95,43 +91,12 @@
             .catch(() => { alert('Error de conexión.'); return false; });
     }
 
-    // Superusuario decidiendo sobre una fabricación que registró él mismo:
-    // aviso propio con Confirmar / Cancelar. Devuelve una promesa con true/false.
-    function confirmarAvisoPropio(verbo) {
-        const modal = $('modal-aviso-propio');
-        const btnConfirmar = $('aviso-propio-confirmar');
-        const btnCancelar = $('aviso-propio-cancelar');
-        $('aviso-propio-texto').textContent =
-            `Estás ${verbo} una fabricación que registraste tú. Quedará registrado que la decisión fue tuya.`;
-        modal.style.display = 'flex';
-        btnCancelar.focus();
-
-        return new Promise(resolve => {
-            function terminar(valor) {
-                modal.style.display = 'none';
-                btnConfirmar.removeEventListener('click', alConfirmar);
-                btnCancelar.removeEventListener('click', alCancelar);
-                document.removeEventListener('keydown', alTeclear, true);
-                resolve(valor);
-            }
-            function alConfirmar() { terminar(true); }
-            function alCancelar() { terminar(false); }
-            function alTeclear(e) {
-                if (e.key === 'Escape') { e.stopPropagation(); terminar(false); }
-            }
-            btnConfirmar.addEventListener('click', alConfirmar);
-            btnCancelar.addEventListener('click', alCancelar);
-            document.addEventListener('keydown', alTeclear, true);
-        });
-    }
-
-    // Recibe los datos mínimos del K1 (id, intento, of, proceso, maquina, es_propio)
+    // Recibe los datos mínimos del K1 (id, intento, of, proceso, maquina)
     // desde la fila de la tabla o desde el panel de detalle.
     function aprobar(k1) {
-        const confirmado = k1.es_propio
-            ? confirmarAvisoPropio('aprobando')
-            : Promise.resolve(confirm(`¿Aprobar el K1 (intento ${k1.intento}) del grabado ${k1.of} ${k1.proceso}?`));
-        confirmado.then(ok => { if (ok) enviarDecision(k1.id, 'aprobar'); });
+        if (confirm(`¿Aprobar el K1 (intento ${k1.intento}) del grabado ${k1.of} ${k1.proceso}?`)) {
+            enviarDecision(k1.id, 'aprobar');
+        }
     }
 
     function abrirModalRechazo(k1) {
@@ -157,8 +122,7 @@
         const k1 = pruebaEnRechazo;
         const btn = $('rechazo-btn-confirmar');
         btn.disabled = true;
-        (k1.es_propio ? confirmarAvisoPropio('rechazando') : Promise.resolve(true))
-            .then(ok => ok ? enviarDecision(k1.id, 'rechazar', motivo) : false)
+        enviarDecision(k1.id, 'rechazar', motivo)
             .then(ok => { if (ok) window.cerrarModalRechazo(); })
             .finally(() => { btn.disabled = false; });
     };
@@ -166,7 +130,7 @@
     // ------------------------------------------------------------ panel detalle
     function desdePanel(k1, detalle) {
         return {
-            id: k1.id, intento: k1.intento, maquina: k1.maquina, es_propio: k1.es_propio,
+            id: k1.id, intento: k1.intento, maquina: k1.maquina,
             of: detalle.of_origen, proceso: detalle.proceso,
         };
     }

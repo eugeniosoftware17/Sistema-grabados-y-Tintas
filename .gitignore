@@ -21,6 +21,7 @@ poblar_api_simulada.py
 
 # IDEs
 .vscode/
+.claude/settings.local.json
 .idea/
 
 # OS

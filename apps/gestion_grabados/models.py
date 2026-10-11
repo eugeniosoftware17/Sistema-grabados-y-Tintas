@@ -453,7 +453,6 @@ class PruebaK1(models.Model):
         verbose_name = "Prueba K1"
         verbose_name_plural = "Pruebas K1"
         ordering = ['grabado', 'intento']
-        permissions = [('decidir_pruebak1', 'Puede aprobar o rechazar pruebas K1')]
         constraints = [
             models.UniqueConstraint(fields=['grabado', 'intento'], name='k1_intento_unico'),
             # Índice filtrado: como mucho un K1 pendiente por grabado.

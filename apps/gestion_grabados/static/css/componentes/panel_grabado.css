@@ -182,16 +182,6 @@ body.pg-bloqueo-scroll { overflow: hidden; }
     flex-shrink: 0;
 }
 .pg-pie:empty { display: none; }
-.pg-aviso-propio {
-    flex: 1 1 100%;
-    font-size: 13px;
-    color: #8a6100;
-    background: #fff8e1;
-    border: 1px solid #ffe082;
-    border-radius: 8px;
-    padding: 8px 12px;
-}
-.pg-aviso-propio--info { color: #1565c0; background: #e3f2fd; border-color: #bbdefb; }
 .pg-boton {
     border: none;
     border-radius: 8px;

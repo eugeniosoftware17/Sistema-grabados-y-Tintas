@@ -3,15 +3,15 @@ Pantallas de la reestructuración (fase 2), sobre los modelos nuevos:
 - Crear Grabado: registra la fabricación de un grabado nuevo (K1 de prueba o
   de producción directa), la refabricación tras un K1 rechazado o la
   refabricación por REPETIR.
-- K1 pendientes: los supervisores aprueban o rechazan las pruebas K1.
+- K1 pendientes: cualquier usuario del módulo aprueba o rechaza las pruebas K1.
 
 Las vistas solo parsean el request y devuelven JsonResponse; las reglas de
-negocio viven en services/grabados.py.
+negocio viven en services/grabados.py. El permiso del módulo Grabados lo
+verifica urls.py (core.permisos.proteger_urls) para todas las rutas.
 """
 import json
-from functools import wraps
 
-from django.contrib.auth.decorators import login_required, permission_required
+from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import render
 
@@ -19,9 +19,6 @@ from . import selectors
 from .models import Grabado, Maquina, PruebaK1
 from .services import grabados as servicio
 from .views import _normalizar_of, buscar_datos_externos
-
-PERMISO_DECIDIR_K1 = servicio.PERMISO_DECIDIR_K1
-
 
 def _error(mensaje, status=400):
     return JsonResponse({'status': 'error', 'message': mensaje}, status=status)
@@ -138,26 +135,15 @@ def api_alta_registrar(request):
 
 
 # ============================================================
-# K1 PENDIENTES (supervisores)
+# K1 PENDIENTES (cualquier usuario del módulo)
 # ============================================================
 
-def _requiere_permiso_k1(vista):
-    """Igual que permission_required pero devolviendo 403 en JSON para las APIs."""
-    @wraps(vista)
-    def envoltura(request, *args, **kwargs):
-        if not request.user.has_perm(PERMISO_DECIDIR_K1):
-            return _error('No tienes permiso para decidir pruebas K1.', status=403)
-        return vista(request, *args, **kwargs)
-    return login_required(envoltura)
-
-
 @login_required
-@permission_required(PERMISO_DECIDIR_K1, raise_exception=True)
 def k1_pendientes(request):
     return render(request, 'k1_pendientes.html')
 
 
-@_requiere_permiso_k1
+@login_required
 def api_k1_pendientes(request):
     pruebas = (PruebaK1.objects.filter(resultado='PENDIENTE')
                .select_related('grabado', 'maquina', 'fabricacion', 'fabricacion__registrado_por')
@@ -177,8 +163,6 @@ def api_k1_pendientes(request):
             'intento': p.intento,
             'registrado_por': f.registrado_por.username if f.registrado_por else '—',
             'registrado_el': selectors.formatear_fecha(f.registrado_el),
-            'es_propio': servicio.es_autor_de_k1(request.user, p),
-            'puede_decidir': servicio.puede_decidir_k1(request.user, p),
         })
     return JsonResponse({'status': 'ok', 'data': datos})
 
@@ -194,7 +178,7 @@ def api_grabado_detalle(request, grabado_id):
     panel lateral (static/js/componentes/panel_grabado.js)."""
     if request.method != 'GET':
         return _error('Método no permitido', status=405)
-    detalle = selectors.detalle_grabado(grabado_id, request.user)
+    detalle = selectors.detalle_grabado(grabado_id)
     if detalle is None:
         return _error('El grabado no existe.', status=404)
     return JsonResponse({'status': 'ok', 'data': detalle})
@@ -221,18 +205,18 @@ def _decidir(request, prueba_id, aprobar):
     return JsonResponse({'status': 'ok', 'message': mensaje})
 
 
-@_requiere_permiso_k1
+@login_required
 def api_k1_aprobar(request, prueba_id):
     return _decidir(request, prueba_id, aprobar=True)
 
 
-@_requiere_permiso_k1
+@login_required
 def api_k1_rechazar(request, prueba_id):
     return _decidir(request, prueba_id, aprobar=False)
 
 
 # ============================================================
-# INVENTARIO DE GRABADOS (consulta, cualquier usuario con sesión)
+# INVENTARIO DE GRABADOS (consulta)
 # ============================================================
 
 @login_required

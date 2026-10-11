@@ -246,7 +246,7 @@
 
         if (evaluacion.accion === 'ALTA' && tipo === 'K1') {
             mostrarAviso('alta-aviso-accion', 'aviso--ok',
-                `Grabado nuevo K1: se crea el grabado ${busqueda.of} ${proceso}, su fabricación inicial y el K1 (intento 1). Quedará Pendiente de K1 hasta que un supervisor lo apruebe.`);
+                `Grabado nuevo K1: se crea el grabado ${busqueda.of} ${proceso}, su fabricación inicial y el K1 (intento 1). Quedará Pendiente de K1 hasta que se apruebe.`);
         } else if (evaluacion.accion === 'ALTA') {
             mostrarAviso('alta-aviso-accion', 'aviso--ok',
                 `Grabado nuevo de producción: se crea el grabado ${busqueda.of} ${proceso} con su fabricación inicial y queda Aprobado al guardar, sin K1 ni máquina.`);

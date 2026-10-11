@@ -1,4 +1,7 @@
 from django.urls import path
+
+from apps.core.permisos import proteger_urls
+
 from . import views
 from . import views_fabricacion
 from . import views_grabados
@@ -44,3 +47,6 @@ urlpatterns = [
     path('inventario/', views_grabados.inventario_grabados, name='inventario_grabados'),
     path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
 ]
+
+# Todas las rutas (páginas y APIs) exigen el permiso del módulo Grabados: sin él, 403.
+urlpatterns = proteger_urls(urlpatterns, 'grabados')

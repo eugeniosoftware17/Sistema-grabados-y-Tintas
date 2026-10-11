@@ -39,7 +39,6 @@ TIPO_DIRECTO = 'DIRECTO'
 TIPOS_CREABLES = (TIPO_K1, TIPO_DIRECTO)
 
 LARGO_MINIMO_MOTIVO_RECHAZO = 5
-PERMISO_DECIDIR_K1 = 'gestion_grabados.decidir_pruebak1'
 
 
 class ErrorGrabado(Exception):
@@ -53,10 +52,6 @@ class ErrorGrabado(Exception):
 
 class TransicionInvalida(ErrorGrabado):
     status = 409
-
-
-class AutoDecisionProhibida(ErrorGrabado):
-    status = 403
 
 
 # ------------------------------------------------------------------ cálculos
@@ -371,33 +366,18 @@ def registrar_fabricacion(*, of_origen, proceso, info_externa, normalizar_of,
             'prueba_k1': prueba, 'bano': bano}
 
 
-def es_autor_de_k1(usuario, prueba):
-    """True si `usuario` registró la fabricación probada o abrió el K1
-    (normalmente la misma persona)."""
-    return usuario.pk in {prueba.fabricacion.registrado_por_id, prueba.creado_por_id} - {None}
-
-
-def puede_decidir_k1(usuario, prueba):
-    """Regla completa para mostrar o permitir la decisión de un K1: tener el
-    permiso decidir_pruebak1 y no ser autor de la fabricación, salvo que sea
-    superusuario (los administradores sí pueden decidir sobre lo propio)."""
-    if not usuario.has_perm(PERMISO_DECIDIR_K1):
-        return False
-    return usuario.is_superuser or not es_autor_de_k1(usuario, prueba)
-
-
 def es_auto_decision(prueba):
-    """K1 ya decidido por la misma persona que registró la fabricación probada
-    (solo puede pasar con un superusuario). Se deduce de los datos, sin campo propio."""
+    """K1 decidido por la misma persona que registró la fabricación probada.
+    Está permitido; solo se muestra como "Auto-aprobado" / "Auto-rechazado".
+    Se deduce de los datos, sin campo propio."""
     return (prueba.decidido_por_id is not None
             and prueba.decidido_por_id == prueba.fabricacion.registrado_por_id)
 
 
 def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
-    """Aprueba o rechaza un K1 pendiente. Quien registró la fabricación probada
-    no puede decidir sobre su propio K1, salvo que sea superusuario; en ese caso
-    decidido_por queda igual a registrado_por y se ve como auto-aprobado/rechazado.
-    El permiso decidir_pruebak1 lo valida la vista."""
+    """Aprueba o rechaza un K1 pendiente. Puede decidirlo cualquier usuario con
+    acceso al módulo Grabados (lo valida la URL), incluso quien registró la
+    fabricación. Queda auditado quién decidió (decidido_por) y cuándo (decidido_el)."""
     motivo = _texto(motivo)
     if not aprobar and len(motivo) < LARGO_MINIMO_MOTIVO_RECHAZO:
         raise ErrorGrabado(f'El motivo del rechazo es obligatorio '
@@ -416,10 +396,6 @@ def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
         if grabado.estado != 'PENDIENTE_K1':
             raise TransicionInvalida(f'El grabado está en estado "{grabado.get_estado_display()}", '
                                      'no en "Pendiente de K1".')
-        if es_autor_de_k1(usuario, prueba) and not usuario.is_superuser:
-            raise AutoDecisionProhibida('No puedes aprobar ni rechazar el K1 de una fabricación '
-                                        'que registraste tú: tiene que decidirlo otro supervisor.')
-
         prueba.resultado = 'APROBADO' if aprobar else 'RECHAZADO'
         prueba.motivo_rechazo = None if aprobar else motivo
         prueba.decidido_por = usuario

@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from .models import EnvioMaquina, FabricacionGrabado, Grabado, PruebaK1
 from .services.grabados import (
-    es_auto_decision, es_autor_de_k1, of_origen_externa, proceso_ausente_en_externo, puede_decidir_k1,
+    es_auto_decision, of_origen_externa, proceso_ausente_en_externo,
 )
 
 
@@ -65,8 +65,8 @@ def _prueba(prueba):
         'creado_el': formatear_fecha(prueba.creado_el),
         'decidido_por': _usuario(prueba.decidido_por),
         'decidido_el': formatear_fecha(prueba.decidido_el),
-        # Decidido por quien registró la fabricación (solo superusuarios): se
-        # muestra como "Auto-aprobado" / "Auto-rechazado".
+        # Decidido por quien registró la fabricación: se muestra como
+        # "Auto-aprobado" / "Auto-rechazado" (solo informativo).
         'auto_decision': es_auto_decision(prueba),
     }
 
@@ -87,10 +87,9 @@ def _envio(envio):
     }
 
 
-def detalle_grabado(grabado_id, usuario):
+def detalle_grabado(grabado_id):
     """Reporte completo de un grabado, o None si no existe.
-    'k1_actual' es el K1 pendiente (si hay), con la fabricación que prueba, si
-    `usuario` es su autor y si puede decidirlo (ver services.puede_decidir_k1)."""
+    'k1_actual' es el K1 pendiente (si hay), con la fabricación que prueba."""
     grabado = (
         Grabado.objects.select_related('creado_por')
         .prefetch_related(
@@ -115,11 +114,7 @@ def detalle_grabado(grabado_id, usuario):
     k1_actual = None
     if pendiente is not None:
         k1_actual = _prueba(pendiente)
-        k1_actual.update(
-            fabricacion=_fabricacion(pendiente.fabricacion),
-            es_propio=es_autor_de_k1(usuario, pendiente),
-            puede_decidir=puede_decidir_k1(usuario, pendiente),
-        )
+        k1_actual['fabricacion'] = _fabricacion(pendiente.fabricacion)
 
     return {
         'id': grabado.id,

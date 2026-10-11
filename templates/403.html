@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="dashboard-wrapper">
+    <div class="dash-card card-wide">
+        <div class="card-label">Acceso denegado</div>
+        <div class="card-value" style="font-size: 1.4rem;">No tienes permiso para entrar a esta sección.</div>
+        <p style="margin-top: 12px;">
+            Si necesitas acceso, pídeselo al administrador del sistema.
+            <a href="{% url 'core:dashboard' %}">Volver al inicio</a>
+        </p>
+    </div>
+</div>
+{% endblock %}
