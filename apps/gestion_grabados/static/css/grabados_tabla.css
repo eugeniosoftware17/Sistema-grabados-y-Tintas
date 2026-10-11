@@ -754,7 +754,8 @@
        .fila-acciones
          ├── .boton-accion.boton-accion--ver
          ├── .boton-accion.boton-accion--editar
-         └── .boton-accion.boton-accion--eliminar
+         ├── .boton-accion.boton-accion--eliminar
+         └── .boton-accion.boton-accion--etiqueta
     ============================================================ */
     .fila-acciones {
       display: flex;
@@ -826,6 +827,23 @@
 
     .boton-accion--eliminar:hover {
       background: #fdf0f0;
+    }
+
+    /* Variante: Imprimir etiqueta 6x4 (Tabla de Consultas y Sobres, ver componentes/etiqueta.js) */
+    .boton-accion--etiqueta {
+      border-color: #c9d3cc;
+      color       : #3d4a42;
+    }
+
+    .boton-accion--etiqueta:hover {
+      background: #f0f9f4;
+      color     : #2d8a3e;
+    }
+
+    .boton-accion:disabled {
+      opacity  : 0.45;
+      cursor   : not-allowed;
+      transform: none;
     }
 
 

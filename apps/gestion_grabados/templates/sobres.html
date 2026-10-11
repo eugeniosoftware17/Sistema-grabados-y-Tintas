@@ -13,6 +13,7 @@
     .pg-etiqueta--ACTIVO { background: #d1e7dd; color: #0a5c36; }
     .sob-acciones { text-align: center; white-space: nowrap; }
     .sob-acciones .pg-boton { padding: 5px 10px; font-size: 12px; }
+    .sob-acciones .boton-accion { vertical-align: middle; }
 
     /* Ubicación editable con doble clic (ver sobres.js). */
     .sob-ubicacion { cursor: text; white-space: nowrap; }
@@ -146,5 +147,6 @@
 </div>
 
 <script src="{% static_v 'js/componentes/filtro_columna.js' %}"></script>
+<script src="{% static_v 'js/componentes/etiqueta.js' %}"></script>
 <script src="{% static_v 'js/sobres.js' %}"></script>
 {% endblock %}

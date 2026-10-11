@@ -384,4 +384,5 @@ def api_plani_recoger(request):
                    f'Usos acumulados: {grabado.usos_acumulados}.')
     else:
         mensaje = f'Grabado {grabado.of_origen} recogido y marcado para REPETIR.'
-    return JsonResponse({'status': 'ok', 'message': mensaje})
+    # grabado_id: el PLANI imprime la etiqueta con la ubicación recién guardada.
+    return JsonResponse({'status': 'ok', 'message': mensaje, 'grabado_id': grabado.id})

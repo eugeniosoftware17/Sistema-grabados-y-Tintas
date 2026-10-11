@@ -508,7 +508,9 @@
             .then(res => {
                 if (res.status !== 'ok') { mostrarAviso('recoger-aviso', 'aviso--error', res.message); return; }
                 cerrarModal('modal-recoger');
-                alert(res.message);
+                alert(`${res.message}\n\nAhora se abre la impresión de la etiqueta.`);
+                // Ya con la ubicación guardada: etiqueta 6x4 del grabado (componentes/etiqueta.js).
+                window.Etiqueta.imprimirGrabado(res.grabado_id);
                 sincronizar(true);
             })
             .catch(() => mostrarAviso('recoger-aviso', 'aviso--error', 'Error de conexión al guardar la recogida.'))

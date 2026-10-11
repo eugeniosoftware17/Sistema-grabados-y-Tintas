@@ -1,0 +1,89 @@
+{% extends "admin/change_form.html" %}
+{% load estaticos l10n %}
+{% comment %}
+  Diseñador de la etiqueta 6x4 (ConfiguracionEtiquetaAdmin, solo superusuario).
+  La vista previa es la misma plantilla que se imprime (etiquetas/_contenido.html)
+  con datos de ejemplo; static/js/disenador_etiqueta.js la acomoda y llena el
+  campo oculto campos_json, que se valida en services.etiquetas.
+{% endcomment %}
+
+{% block extrastyle %}{{ block.super }}
+{% include "etiquetas/_estilos.html" %}
+<style>
+    .de-contenedor { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; margin: 10px 0 20px; }
+    .de-previa { flex: none; max-width: 100%; overflow-x: auto; }
+    .de-previa__ayuda { margin: 0 0 8px; color: var(--body-quiet-color); }
+    .de-previa .etiqueta { box-shadow: 0 0 0 1px #9aa59e; background-image:
+        linear-gradient(to right, rgba(0,0,0,0.05) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(0,0,0,0.05) 1px, transparent 1px);
+        background-size: 0.5in 0.5in; }
+    .de-previa .et-campo { cursor: move; outline: 1px dashed rgba(45, 138, 62, 0.55); touch-action: none;
+                           user-select: none; }
+    .de-previa .et-campo.de-seleccionado { outline: 2px solid #2d8a3e; background: rgba(45, 138, 62, 0.08); }
+    .de-previa .et-campo img { pointer-events: none; }
+    .de-panel { flex: 1; min-width: 320px; }
+    .de-tabla { width: 100%; border-collapse: collapse; }
+    .de-tabla th, .de-tabla td { padding: 4px 6px; text-align: left; vertical-align: middle; }
+    .de-tabla input[type="number"] { width: 64px; }
+    .de-tabla tr.de-seleccionado td { background: var(--selected-row, #eef6f0); }
+    .de-tabla td.de-nombre { font-weight: 600; white-space: nowrap; cursor: pointer; }
+    .de-acciones { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; align-items: center; }
+    .de-logo { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--hairline-color); }
+    .de-logo p { margin: 6px 0; }
+    .de-errores { color: var(--error-fg); margin-bottom: 10px; }
+</style>
+{% endblock %}
+
+{% block field_sets %}
+{% with formulario=adminform.form %}
+  {% if formulario.non_field_errors or formulario.campos_json.errors %}
+    <div class="de-errores">{{ formulario.non_field_errors }}{{ formulario.campos_json.errors }}</div>
+  {% endif %}
+  {{ formulario.campos_json }}
+  <div class="de-contenedor">
+    <div class="de-previa">
+      <p class="de-previa__ayuda">Vista previa a tamaño real (6 x 4 pulgadas, cuadrícula de media pulgada) con datos de ejemplo. Arrastra cada campo para moverlo; haz clic para seleccionarlo.</p>
+      {% include "etiquetas/_contenido.html" %}
+    </div>
+
+    <div class="de-panel">
+      <table class="de-tabla" aria-label="Campos de la etiqueta">
+        <thead>
+          <tr><th>Campo</th><th>Visible</th><th>X (in)</th><th>Y (in)</th><th>Ancho (in)</th><th>Alto (in)</th><th>Letra (pt)</th></tr>
+        </thead>
+        <tbody id="de-campos">
+          {% for c in config.campos %}
+          <tr data-campo="{{ c.clave }}">
+            <td class="de-nombre">{{ c.nombre }}</td>
+            <td><input type="checkbox" data-prop="visible" aria-label="Mostrar {{ c.nombre }}"></td>
+            <td><input type="number" data-prop="x" step="0.05" min="0" max="{{ limites.ancho|unlocalize }}" aria-label="X de {{ c.nombre }}"></td>
+            <td><input type="number" data-prop="y" step="0.05" min="0" max="{{ limites.alto|unlocalize }}" aria-label="Y de {{ c.nombre }}"></td>
+            <td><input type="number" data-prop="ancho" step="0.05" min="{{ limites.medida_min|unlocalize }}" max="{{ limites.ancho|unlocalize }}" aria-label="Ancho de {{ c.nombre }}"></td>
+            <td><input type="number" data-prop="alto" step="0.05" min="{{ limites.medida_min|unlocalize }}" max="{{ limites.alto|unlocalize }}" aria-label="Alto de {{ c.nombre }}"></td>
+            <td>{% if c.clave != 'logo' %}<input type="number" data-prop="tamano" step="1" min="{{ limites.tamano_min }}" max="{{ limites.tamano_max }}" aria-label="Tamaño de letra de {{ c.nombre }}">{% else %}—{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="de-acciones">
+        <button type="button" class="button" id="de-restaurar">Restaurar valores por defecto</button>
+        <a class="button" href="{% url 'grabados:etiqueta_prueba' %}" target="_blank" rel="noopener">Abrir página de prueba de impresión</a>
+      </div>
+      <p class="help">La página de prueba usa el diseño <strong>guardado</strong>: guarda antes de probar.</p>
+
+      <div class="de-logo">
+        <strong>Logo</strong>
+        <p>{% if config.logo_propio %}Usando el logo subido.{% else %}Usando el logo por defecto de Cigar Rings.{% endif %}</p>
+        {% if formulario.logo_archivo.errors %}<div class="de-errores">{{ formulario.logo_archivo.errors }}</div>{% endif %}
+        <p><label for="{{ formulario.logo_archivo.id_for_label }}">{{ formulario.logo_archivo.label }}</label><br>{{ formulario.logo_archivo }}</p>
+        {% if config.logo_propio %}<p>{{ formulario.quitar_logo }} <label for="{{ formulario.quitar_logo.id_for_label }}">{{ formulario.quitar_logo.label }}</label></p>{% endif %}
+      </div>
+    </div>
+  </div>
+{% endwith %}
+{{ campos_por_defecto|json_script:"de-defectos" }}
+{{ limites|json_script:"de-limites" }}
+<script src="{% static_v 'js/disenador_etiqueta.js' %}"></script>
+{% endblock %}
+
+{% block inline_field_sets %}{% endblock %}

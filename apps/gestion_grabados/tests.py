@@ -11,7 +11,7 @@ import os
 import shutil
 import tempfile
 from datetime import date, datetime, timedelta, timezone as dt_timezone
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -21,17 +21,19 @@ from django.contrib.auth.models import Group, Permission, User
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db.models import F
-from django.test import Client, RequestFactory, TestCase, override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.gestion_grabados import selectors
+from apps.gestion_grabados import codigo128, selectors
 from apps.gestion_grabados.models import (
     EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion,
     HistorialActivacionSobre, HistorialUbicacionSobre, LegadoOrden, Maquina, OrdenFabricacion, PruebaK1,
-    Sobre,
+    Sobre, ConfiguracionEtiqueta,
 )
 from apps.gestion_grabados.services import grabados as servicio
+from apps.gestion_grabados.services import etiquetas as servicio_etiquetas
 from apps.gestion_grabados.services import sobres as servicio_sobres
 from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
 
@@ -2043,6 +2045,8 @@ class PlaniVistasTests(BasePlani):
         })
         self.assertEqual(respuesta.status_code, 200, respuesta.content)
         self.assertIn('Usos acumulados: 1', respuesta.json()['message'])
+        # El PLANI imprime la etiqueta de este grabado después de guardar la ubicación.
+        self.assertEqual(respuesta.json()['grabado_id'], grabado.id)
 
     def test_errores_por_api(self):
         grabado = self.aprobado()
@@ -3321,3 +3325,290 @@ class SobreAdminTests(BaseGrabados):
                 self.assertFalse(modelo_admin.has_delete_permission(peticion))
                 self.assertEqual(modelo._meta.get_field('sobre').remote_field.on_delete.__name__, 'PROTECT')
         self.assertEqual(Grabado._meta.get_field('sobre_asociado').remote_field.on_delete.__name__, 'PROTECT')
+
+
+# ============================================================
+# ETIQUETA 6x4 CON CÓDIGO DE BARRAS (paso 3)
+# ============================================================
+
+def png_de_prueba(ancho=20, alto=10):
+    from PIL import Image
+    salida = BytesIO()
+    Image.new('RGB', (ancho, alto), (200, 30, 30)).save(salida, format='PNG')
+    return salida.getvalue()
+
+
+class Codigo128Tests(SimpleTestCase):
+
+    def test_tabla_de_patrones_completa_y_consistente(self):
+        self.assertEqual(len(codigo128.PATRONES), 107)
+        self.assertEqual(len(set(codigo128.PATRONES)), 107)
+        for valor, patron in enumerate(codigo128.PATRONES):
+            with self.subTest(valor=valor):
+                self.assertEqual(sum(map(int, patron)), 13 if valor == codigo128.STOP else 11)
+
+    def test_digito_de_control_calculado_a_mano(self):
+        # Start B 104 + P(48)*1 + J(42)*2 + J(42)*3 + 1(17)*4 + 2(18)*5 + 3(19)*6 + C(35)*7 = 879; 879 % 103 = 55
+        self.assertEqual(codigo128.valores('PJJ123C'), [104, 48, 42, 42, 17, 18, 19, 35, 55, 106])
+
+    def test_las_barras_se_leen_de_vuelta(self):
+        anchos = codigo128.modulos('22741-S')
+        patron_a_valor = {p: v for v, p in enumerate(codigo128.PATRONES)}
+        simbolos = [''.join(map(str, anchos[i:i + 6])) for i in range(0, len(anchos) - 7, 6)]
+        valores = [patron_a_valor[s] for s in simbolos]
+        self.assertEqual(valores[0], codigo128.INICIO_B)
+        self.assertEqual(''.join(chr(v + 32) for v in valores[1:-1]), '22741-S')
+        self.assertEqual(valores[-1], codigo128.valores('22741-S')[-2])   # dígito de control
+        self.assertEqual(''.join(map(str, anchos[-7:])), codigo128.PATRONES[codigo128.STOP])
+
+    def test_caracteres_invalidos_o_vacio(self):
+        with self.assertRaises(codigo128.CodigoInvalido):
+            codigo128.valores('22741-Ñ')
+        with self.assertRaises(codigo128.CodigoInvalido):
+            codigo128.valores('')
+
+    def test_svg_dibuja_una_barra_por_cada_negro(self):
+        svg = codigo128.svg('22741-S')
+        # Start + 7 caracteres + control = 9 símbolos de 3 barras, más 4 barras del Stop.
+        self.assertEqual(svg.count('<rect'), 9 * 3 + 4)
+        self.assertIn('aria-label="22741-S"', svg)
+        self.assertIn('preserveAspectRatio="none"', svg)
+
+
+class ValorCodigoBarrasTests(SimpleTestCase):
+
+    def test_of_mas_letra_del_proceso(self):
+        self.assertEqual(selectors.valor_codigo_barras('22741', 'STAMPING'), '22741-S')
+        self.assertEqual(selectors.valor_codigo_barras('22741', 'EMBOSSING'), '22741-E')
+
+
+class ConfiguracionEtiquetaTests(BaseGrabados):
+
+    def test_sin_configuracion_usa_los_valores_por_defecto(self):
+        self.assertEqual(servicio_etiquetas.normalizar_campos(None), servicio_etiquetas.CAMPOS_POR_DEFECTO)
+        config = selectors.configuracion_etiqueta()
+        self.assertFalse(ConfiguracionEtiqueta.objects.exists())   # leer no crea la fila
+        self.assertEqual([c['clave'] for c in config['campos']],
+                         [clave for clave, _ in servicio_etiquetas.CAMPOS_ETIQUETA])
+        self.assertTrue(config['logo_url'].endswith('img/logo/Imagen1.png'))
+        self.assertFalse(config['logo_propio'])
+
+    def test_completa_lo_que_falta_redondea_y_mete_el_campo_en_la_etiqueta(self):
+        campos = servicio_etiquetas.normalizar_campos(
+            {'ubicacion': {'x': 5.5, 'y': -1, 'tamano': 50.04, 'visible': False}})
+        self.assertEqual(campos['ubicacion'], {'visible': False, 'x': 2.4, 'y': 0.0, 'ancho': 3.6,
+                                               'alto': 0.8, 'tamano': 50.0})
+        self.assertEqual(campos['of'], servicio_etiquetas.CAMPOS_POR_DEFECTO['of'])
+
+    def test_valores_invalidos(self):
+        casos = [
+            ({'otro': {}}, 'Campo desconocido'),
+            ({'of': {'ancho': 6.5}}, 'el ancho'),
+            ({'of': {'alto': 0}}, 'el alto'),
+            ({'of': {'tamano': 200}}, 'tamaño de letra'),
+            ({'of': {'x': '1'}}, 'tiene que ser un número'),
+            ({'of': {'visible': 'si'}}, 'verdadero o falso'),
+            ([], 'formato válido'),
+        ]
+        for campos, mensaje in casos:
+            with self.subTest(campos=campos):
+                with self.assertRaisesMessage(servicio_etiquetas.ConfiguracionInvalida, mensaje):
+                    servicio_etiquetas.normalizar_campos(campos)
+
+    def test_guardar_usa_siempre_la_misma_fila(self):
+        servicio_etiquetas.guardar_configuracion(campos={'of': {'tamano': 40}}, usuario=self.admin)
+        servicio_etiquetas.guardar_configuracion(campos={'of': {'tamano': 42}}, usuario=self.admin)
+        config = ConfiguracionEtiqueta.objects.get()
+        self.assertEqual(config.pk, 1)
+        self.assertEqual(config.campos['of']['tamano'], 42)
+        self.assertEqual(config.actualizado_por, self.admin)
+
+    def test_logo_en_la_base_y_volver_al_por_defecto(self):
+        png = png_de_prueba()
+        servicio_etiquetas.guardar_configuracion(campos={}, usuario=self.admin, logo=png)
+        config = ConfiguracionEtiqueta.objects.get()
+        self.assertEqual((bytes(config.logo), config.logo_tipo), (png, 'image/png'))
+        self.assertTrue(selectors.configuracion_etiqueta()['logo_url'].startswith('data:image/png;base64,'))
+
+        # Guardar sin logo nuevo conserva el que había.
+        servicio_etiquetas.guardar_configuracion(campos={}, usuario=self.admin)
+        self.assertTrue(selectors.configuracion_etiqueta()['logo_propio'])
+
+        servicio_etiquetas.guardar_configuracion(campos={}, usuario=self.admin, quitar_logo=True)
+        self.assertFalse(selectors.configuracion_etiqueta()['logo_propio'])
+
+    def test_logo_invalido(self):
+        with self.assertRaisesMessage(servicio_etiquetas.ConfiguracionInvalida, 'PNG o JPG'):
+            servicio_etiquetas.validar_logo(b'no es una imagen')
+        with self.assertRaisesMessage(servicio_etiquetas.ConfiguracionInvalida, '1 MB'):
+            servicio_etiquetas.validar_logo(b'x' * (servicio_etiquetas.LOGO_MAXIMO_BYTES + 1))
+        with self.assertRaisesMessage(servicio_etiquetas.ConfiguracionInvalida, 'vacío'):
+            servicio_etiquetas.validar_logo(b'')
+
+    def test_una_fila_danada_no_deja_sin_etiquetas(self):
+        ConfiguracionEtiqueta.objects.create(pk=1, campos={'of': {'ancho': 'mal'}})
+        config = selectors.configuracion_etiqueta()
+        self.assertEqual(config['campos_dict'], servicio_etiquetas.CAMPOS_POR_DEFECTO)
+
+
+class EtiquetaVistasTests(BasePlani):
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+
+    def url_grabado(self, grabado, imprimir=False):
+        url = reverse('grabados:etiqueta_grabado', args=[grabado.id])
+        return f'{url}?imprimir=1' if imprimir else url
+
+    def test_etiqueta_del_grabado(self):
+        grabado = self.aprobado()
+        servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='gbb-2-1', usuario=self.operario)
+        grabado.refresh_from_db()
+        respuesta = self.client.get(self.url_grabado(grabado))
+        self.assertEqual(respuesta.status_code, 200)
+        html = respuesta.content.decode()
+        for texto in ('OF 22741', 'STAMPING', 'CLIENTE SA', 'ANILLA DORADA', 'GBB-2-1',
+                      selectors.formatear_fecha(grabado.actualizado_el), '22741-S', '<svg',
+                      'size: 6in 4in', 'Imagen1.png'):
+            with self.subTest(texto=texto):
+                self.assertIn(texto, html)
+        self.assertEqual(respuesta['X-Frame-Options'], 'SAMEORIGIN')   # se imprime desde un iframe
+        self.assertNotIn("window.addEventListener('load'", html)       # sin ?imprimir=1 no abre el diálogo
+
+    def test_con_imprimir_abre_el_dialogo_al_cargar(self):
+        grabado = self.aprobado()
+        html = self.client.get(self.url_grabado(grabado, imprimir=True)).content.decode()
+        self.assertIn("window.addEventListener('load', function () { window.print(); });", html)
+
+    def test_embossing_y_grabado_inactivo(self):
+        grabado = self.aprobado(of='30000', proceso='EMBOSSING')
+        servicio.desactivar_grabado(grabado_id=grabado.id, motivo='Ya no se usa', usuario=self.operario)
+        respuesta = self.client.get(self.url_grabado(grabado))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, '30000-E')
+
+    def test_etiqueta_del_sobre_usa_ubicacion_y_fecha_del_sobre(self):
+        grabado = self.registrar(ubicacion_sobre='SOB-9-9')['grabado']
+        servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='GBB-1-1', usuario=self.operario)
+        sobre = Sobre.objects.get(of_origen='22741', proceso='STAMPING')
+        respuesta = self.client.get(reverse('grabados:etiqueta_sobre', args=[sobre.id]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'SOB-9-9')
+        self.assertNotContains(respuesta, 'GBB-1-1')
+        self.assertContains(respuesta, 'ANILLA DORADA')   # descripción del grabado enlazado
+        self.assertContains(respuesta, selectors.formatear_fecha(sobre.actualizado_el))
+        self.assertContains(respuesta, '22741-S')
+
+    def test_sobre_sin_grabado_enlazado(self):
+        sobre = Sobre.objects.create(of_origen='10000', proceso='EMBOSSING')
+        datos = selectors.datos_etiqueta_sobre(sobre.id)
+        self.assertEqual((datos['cliente'], datos['descripcion'], datos['ubicacion'], datos['codigo']),
+                         ('—', '—', '—', '10000-E'))
+
+    def test_no_existe_da_404(self):
+        self.assertEqual(self.client.get(reverse('grabados:etiqueta_grabado', args=[999999])).status_code, 404)
+        self.assertEqual(self.client.get(reverse('grabados:etiqueta_sobre', args=[999999])).status_code, 404)
+
+    def test_pagina_de_prueba(self):
+        respuesta = self.client.get(reverse('grabados:etiqueta_prueba'))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'Página de prueba')
+        self.assertContains(respuesta, '22741-S')
+        self.assertContains(respuesta, 'GBB-2-1')
+
+    def test_la_etiqueta_usa_el_diseno_guardado(self):
+        servicio_etiquetas.guardar_configuracion(
+            campos={'ubicacion': {'visible': False}, 'of': {'tamano': 50, 'x': 1.25}},
+            usuario=self.admin, logo=png_de_prueba())
+        html = self.client.get(reverse('grabados:etiqueta_prueba')).content.decode()
+        self.assertNotIn('data-campo="ubicacion"', html)
+        self.assertIn('left:1.25in;', html)
+        self.assertIn('font-size:50.0pt;', html)
+        self.assertIn('data:image/png;base64,', html)
+        self.assertNotIn('Imagen1.png', html)
+
+    def test_no_se_guarda_control_de_impresiones(self):
+        grabado = self.aprobado()
+        antes = grabado.actualizado_el
+        self.client.get(self.url_grabado(grabado, imprimir=True))
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.actualizado_el, antes)
+
+
+class EtiquetaBotonesTests(BaseGrabados):
+
+    def test_las_pantallas_cargan_el_componente(self):
+        self.client.force_login(self.operario)
+        for nombre in ('inventario_grabados', 'grabado_consulta', 'sobres', 'plani_consulta'):
+            with self.subTest(pantalla=nombre):
+                self.assertContains(self.client.get(reverse(f'grabados:{nombre}')), 'js/componentes/etiqueta.js')
+
+    def test_botones_de_etiqueta_habilitados(self):
+        inventario = (RUTA_JS / 'inventario_grabados.js').read_text(encoding='utf-8')
+        self.assertNotIn('Disponible próximamente', inventario)
+        self.assertIn('Etiqueta.imprimirGrabado(imprimir.dataset.id)', inventario)
+        self.assertIn('Etiqueta.imprimirSobre(sobre.id)', (RUTA_JS / 'sobres.js').read_text(encoding='utf-8'))
+        tabla = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
+        self.assertIn('Etiqueta.imprimirGrabado(etiqueta.dataset.etiqueta)', tabla)
+        self.assertIn('Sin grabado en EIS: no hay etiqueta que imprimir', tabla)
+        self.assertIn('Etiqueta.imprimirGrabado(res.grabado_id)',
+                      (RUTA_JS / 'plani_tabla.js').read_text(encoding='utf-8'))
+
+
+class DisenadorEtiquetaAdminTests(BaseGrabados):
+
+    URL = '/crdadmin/gestion_grabados/configuracionetiqueta/1/change/'
+
+    def datos(self, **cambios):
+        datos = {'campos_json': json.dumps(servicio_etiquetas.CAMPOS_POR_DEFECTO), '_save': 'Guardar'}
+        datos.update(cambios)
+        return datos
+
+    def test_la_lista_lleva_al_disenador_sin_crear_la_fila(self):
+        self.client.force_login(self.admin)
+        respuesta = self.client.get(reverse('admin:gestion_grabados_configuracionetiqueta_changelist'))
+        self.assertRedirects(respuesta, self.URL)
+        respuesta = self.client.get(self.URL)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'id="de-campos"')
+        self.assertContains(respuesta, 'id="id_campos_json"')
+        self.assertContains(respuesta, reverse('grabados:etiqueta_prueba'))
+        self.assertContains(respuesta, 'enctype="multipart/form-data"')
+        self.assertFalse(ConfiguracionEtiqueta.objects.exists())
+
+    def test_guardar_diseno_y_logo(self):
+        self.client.force_login(self.admin)
+        campos = dict(servicio_etiquetas.CAMPOS_POR_DEFECTO)
+        campos['fecha'] = {**campos['fecha'], 'visible': False}
+        logo = SimpleUploadedFile('logo.png', png_de_prueba(), content_type='image/png')
+        respuesta = self.client.post(self.URL, self.datos(campos_json=json.dumps(campos), logo_archivo=logo))
+        self.assertEqual(respuesta.status_code, 302, respuesta.content[:2000])
+        config = ConfiguracionEtiqueta.objects.get()
+        self.assertFalse(config.campos['fecha']['visible'])
+        self.assertEqual((config.logo_tipo, config.actualizado_por), ('image/png', self.admin))
+
+    def test_diseno_o_logo_invalidos_no_guardan(self):
+        self.client.force_login(self.admin)
+        respuesta = self.client.post(self.URL, self.datos(campos_json=json.dumps({'of': {'tamano': 500}})))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, 'tamaño de letra')
+        logo = SimpleUploadedFile('logo.png', b'no es imagen', content_type='image/png')
+        respuesta = self.client.post(self.URL, self.datos(logo_archivo=logo))
+        self.assertContains(respuesta, 'PNG o JPG')
+        self.assertFalse(ConfiguracionEtiqueta.objects.exists())
+
+    def test_solo_superusuario(self):
+        staff = User.objects.create_user('staff', password='x', is_staff=True)
+        staff.user_permissions.add(*Permission.objects.filter(
+            content_type__app_label='gestion_grabados', codename__endswith='configuracionetiqueta'))
+        self.client.force_login(staff)
+        self.assertEqual(self.client.get(self.URL).status_code, 403)
+        self.assertEqual(self.client.post(self.URL, self.datos()).status_code, 403)
+        self.assertFalse(ConfiguracionEtiqueta.objects.exists())
+
+        modelo_admin = admin.site._registry[ConfiguracionEtiqueta]
+        peticion = mock.Mock(user=self.admin)
+        self.assertFalse(modelo_admin.has_add_permission(peticion))
+        self.assertFalse(modelo_admin.has_delete_permission(peticion))
+        peticion = mock.Mock(user=staff)
+        self.assertFalse(modelo_admin.has_module_permission(peticion))

@@ -788,3 +788,92 @@ def kpis_consulta(hoy):
         'pendientes': (viejas_sin_grabado.filter(estado='PENDIENTE').count()
                        + Grabado.objects.filter(estado__in=ESTADOS_PENDIENTES_GRABADO).count()),
     }
+
+
+# ------------------------------------------------------------------ etiqueta 6x4
+LOGO_POR_DEFECTO = 'img/logo/Imagen1.png'
+LETRA_PROCESO = {'STAMPING': 'S', 'EMBOSSING': 'E'}
+
+
+def valor_codigo_barras(of_origen, proceso):
+    """OF + letra del proceso: 22741-S (Stamping) / 22741-E (Embossing). No se guarda."""
+    return f'{of_origen}-{LETRA_PROCESO.get(proceso, proceso[:1])}'
+
+
+def configuracion_etiqueta():
+    """
+    Diseño vigente listo para dibujar: lista de campos (en orden, con su nombre) y
+    la URL del logo (data URI del logo subido o el de static/). No escribe: si
+    todavía no hay fila, usa los valores por defecto.
+    """
+    import base64
+
+    from django.templatetags.static import static
+
+    from .models import ConfiguracionEtiqueta
+    from .services import etiquetas
+
+    config = ConfiguracionEtiqueta.objects.filter(pk=1).first()
+    try:
+        campos = etiquetas.normalizar_campos(config.campos if config else None)
+    except etiquetas.ConfiguracionInvalida:
+        campos = etiquetas.normalizar_campos(None)   # una fila dañada no deja sin etiquetas
+    if config and config.logo:
+        logo_url = f'data:{config.logo_tipo};base64,{base64.b64encode(bytes(config.logo)).decode()}'
+    else:
+        logo_url = static(LOGO_POR_DEFECTO)
+    return {
+        'campos': [{'clave': clave, 'nombre': nombre, **campos[clave]}
+                   for clave, nombre in etiquetas.CAMPOS_ETIQUETA],
+        'campos_dict': campos,
+        'logo_url': logo_url,
+        'logo_propio': bool(config and config.logo),
+    }
+
+
+def _datos_etiqueta(*, of_origen, proceso, cliente, descripcion, ubicacion, fecha):
+    from . import codigo128
+
+    codigo = valor_codigo_barras(of_origen, proceso)
+    return {
+        'of': of_origen,
+        'proceso': proceso,
+        'cliente': cliente or '—',
+        'descripcion': descripcion or '—',
+        'ubicacion': ubicacion or '—',
+        'fecha': formatear_fecha(fecha) or '—',
+        'codigo': codigo,
+        'codigo_svg': codigo128.svg(codigo),
+    }
+
+
+def datos_etiqueta_grabado(grabado_id):
+    """Datos de la etiqueta de un grabado (su ubicación y su última modificación) o None."""
+    grabado = Grabado.objects.filter(pk=grabado_id).first()
+    if grabado is None:
+        return None
+    return _datos_etiqueta(of_origen=grabado.of_origen, proceso=grabado.proceso, cliente=grabado.cliente,
+                           descripcion=grabado.referencia, ubicacion=grabado.ubicacion,
+                           fecha=grabado.actualizado_el)
+
+
+def datos_etiqueta_sobre(sobre_id):
+    """
+    Etiqueta de un sobre: ubicación y última modificación del SOBRE; cliente y
+    descripción del grabado enlazado (si no tiene, "—"). None si no existe.
+    """
+    sobre = Sobre.objects.filter(pk=sobre_id).first()
+    if sobre is None:
+        return None
+    grabado = Grabado.objects.filter(sobre_asociado=sobre).first()
+    return _datos_etiqueta(of_origen=sobre.of_origen, proceso=sobre.proceso,
+                           cliente=grabado.cliente if grabado else None,
+                           descripcion=grabado.referencia if grabado else None,
+                           ubicacion=sobre.ubicacion, fecha=sobre.actualizado_el)
+
+
+def datos_etiqueta_prueba():
+    """Datos de ejemplo para la página de prueba de impresión y el diseñador."""
+    return _datos_etiqueta(of_origen='22741', proceso='STAMPING', cliente='CLIENTE DE EJEMPLO, S.A.',
+                           descripcion='ANILLA DORADA 52 MM - EDICIÓN ESPECIAL CON RELIEVE',
+                           ubicacion='GBB-2-1', fecha=timezone.now())

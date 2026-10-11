@@ -83,7 +83,10 @@
         const boton = s.estado === 'INACTIVO'
             ? `<button type="button" class="pg-boton pg-boton--reactivar" data-accion="reactivar">Reactivar</button>`
             : `<button type="button" class="pg-boton pg-boton--desactivar" data-accion="desactivar">Desactivar</button>`;
-        return `<td data-label="Acciones" class="sob-acciones">${boton}</td>`;
+        const etiqueta = `<button type="button" class="boton-accion boton-accion--etiqueta" data-accion="etiqueta"
+                title="Imprimir etiqueta" aria-label="Imprimir etiqueta del sobre ${escapar(s.of_origen)} ${escapar(s.proceso)}">
+                ${window.Etiqueta.BOTON_SVG}</button>`;
+        return `<td data-label="Acciones" class="sob-acciones">${etiqueta} ${boton}</td>`;
     }
 
     function renderizar(res) {
@@ -259,7 +262,8 @@
         const boton = e.target.closest('[data-accion]');
         if (!boton) return;
         const sobre = sobreDeFila(boton.closest('.sob-fila'));
-        if (boton.dataset.accion === 'desactivar') abrirDesactivar(sobre);
+        if (boton.dataset.accion === 'etiqueta') window.Etiqueta.imprimirSobre(sobre.id);
+        else if (boton.dataset.accion === 'desactivar') abrirDesactivar(sobre);
         else reactivar(sobre, boton);
     });
 

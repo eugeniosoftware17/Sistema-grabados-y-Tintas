@@ -741,3 +741,29 @@ class LegadoOrden(models.Model):
 
     def __str__(self):
         return f"Orden legada {self.orden_id} -> {self.rol}"
+
+
+class ConfiguracionEtiqueta(models.Model):
+    """
+    Diseño de la etiqueta 6x4" (una sola fila, pk=1) que usan todas las etiquetas
+    de grabados y sobres. Se edita en el admin (solo superusuario) y se guarda por
+    services.etiquetas.guardar_configuracion. Si la fila no existe se usan los
+    valores por defecto (services.etiquetas.CAMPOS_POR_DEFECTO).
+    """
+    # Por cada campo de la etiqueta: visible, x, y, ancho, alto (pulgadas) y tamano (pt).
+    campos = models.JSONField(default=dict, blank=True, verbose_name="Campos")
+    # El logo va en la base (no hay MEDIA_ROOT); vacío = logo de static/img/logo/.
+    logo = models.BinaryField(null=True, blank=True, verbose_name="Logo")
+    logo_tipo = models.CharField(max_length=20, blank=True, default='', verbose_name="Tipo de imagen del logo")
+    actualizado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Actualizado por"
+    )
+    actualizado_el = models.DateTimeField(auto_now=True, verbose_name="Última Actualización")
+
+    class Meta:
+        verbose_name = "Diseño de etiqueta"
+        verbose_name_plural = "Diseño de etiqueta"
+
+    def __str__(self):
+        return "Diseño de etiqueta 6x4"

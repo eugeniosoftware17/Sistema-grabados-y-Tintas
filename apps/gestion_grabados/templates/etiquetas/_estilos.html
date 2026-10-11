@@ -1,0 +1,16 @@
+<style>
+    /* Etiqueta 6x4" horizontal (Zebra). Medidas en pulgadas: lo que se ve es lo que se imprime. */
+    .etiqueta { position: relative; width: 6in; height: 4in; overflow: hidden; background: #fff; color: #000;
+                font-family: Arial, Helvetica, sans-serif; box-sizing: border-box; }
+    .et-campo { position: absolute; overflow: hidden; line-height: 1.15; box-sizing: border-box; }
+    .et-of, .et-proceso, .et-cliente, .et-ubicacion { white-space: nowrap; text-overflow: ellipsis; }
+    .et-of, .et-ubicacion { font-weight: 700; }
+    .et-proceso { font-weight: 700; letter-spacing: 0.04em; }
+    .et-ubicacion { line-height: 1; }
+    .et-fecha__titulo { display: block; font-size: 0.85em; text-transform: uppercase; }
+    .et-logo img { width: 100%; height: 100%; object-fit: contain; object-position: left center; display: block; }
+    .et-codigo_barras { display: flex; flex-direction: column; }
+    .et-barras { flex: 1; min-height: 0; }
+    .et-barras svg { display: block; fill: #000; }
+    .et-barras__texto { text-align: center; letter-spacing: 0.08em; padding-top: 2px; }
+</style>

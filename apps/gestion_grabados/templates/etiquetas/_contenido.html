@@ -1,0 +1,22 @@
+{% load l10n %}{% comment %}
+  Cuerpo de la etiqueta 6x4 (lo usan etiqueta.html y el diseñador del admin).
+  Cada campo va en posición absoluta, en pulgadas, según ConfiguracionEtiqueta.
+  Con disenador=True se dibujan también los ocultos (hidden) para poder activarlos.
+{% endcomment %}{% localize off %}
+<div class="etiqueta" id="etiqueta">
+  {% for c in config.campos %}{% if c.visible or disenador %}
+  <div class="et-campo et-{{ c.clave }}" data-campo="{{ c.clave }}"{% if not c.visible %} hidden{% endif %}
+       style="left:{{ c.x }}in; top:{{ c.y }}in; width:{{ c.ancho }}in; height:{{ c.alto }}in; font-size:{{ c.tamano }}pt;">
+    {% if c.clave == 'logo' %}<img src="{{ config.logo_url }}" alt="Cigar Rings">
+    {% elif c.clave == 'of' %}OF {{ datos.of }}
+    {% elif c.clave == 'proceso' %}{{ datos.proceso }}
+    {% elif c.clave == 'cliente' %}{{ datos.cliente }}
+    {% elif c.clave == 'descripcion' %}{{ datos.descripcion }}
+    {% elif c.clave == 'ubicacion' %}{{ datos.ubicacion }}
+    {% elif c.clave == 'fecha' %}<span class="et-fecha__titulo">Última modificación</span>{{ datos.fecha }}
+    {% elif c.clave == 'codigo_barras' %}<div class="et-barras">{{ datos.codigo_svg|safe }}</div><div class="et-barras__texto">{{ datos.codigo }}</div>
+    {% endif %}
+  </div>
+  {% endif %}{% endfor %}
+</div>
+{% endlocalize %}

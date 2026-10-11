@@ -1,8 +1,17 @@
+import json
+
+from django import forms
 from django.contrib import admin
+from django.http import HttpResponseRedirect
+from django.urls import reverse
+
+from . import selectors
+from .services import etiquetas
 from .models import (
     OrdenFabricacion, EstadoBano,
     Maquina, Grabado, FabricacionGrabado, PruebaK1, EnvioMaquina, LegadoOrden,
     HistorialUbicacion, HistorialActivacion, Sobre, HistorialUbicacionSobre, HistorialActivacionSobre,
+    ConfiguracionEtiqueta,
 )
 
 @admin.register(EstadoBano)
@@ -206,3 +215,113 @@ class LegadoOrdenAdmin(admin.ModelAdmin):
     search_fields = ('orden__of', 'grabado__of_origen')
     readonly_fields = ('orden', 'rol', 'grabado', 'fabricacion', 'envio', 'migrado_el')
     list_select_related = ('orden', 'grabado')
+
+
+# ============================================================
+# Diseñador de la etiqueta 6x4 (una sola fila, solo superusuario)
+# ============================================================
+
+class ConfiguracionEtiquetaForm(forms.ModelForm):
+    """El diseño viaja como JSON en un campo oculto que llena disenador_etiqueta.js;
+    el logo se sube como archivo y se guarda en la base (services.etiquetas)."""
+    campos_json = forms.CharField(widget=forms.HiddenInput)
+    logo_archivo = forms.FileField(required=False, label="Logo (PNG o JPG, máx. 1 MB)",
+                                   widget=forms.FileInput(attrs={'accept': 'image/png,image/jpeg'}))
+    quitar_logo = forms.BooleanField(required=False, label="Volver al logo por defecto")
+
+    class Meta:
+        model = ConfiguracionEtiqueta
+        fields = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        try:
+            campos = etiquetas.normalizar_campos(self.instance.campos)
+        except etiquetas.ConfiguracionInvalida:
+            campos = etiquetas.normalizar_campos(None)
+        self.fields['campos_json'].initial = json.dumps(campos)
+
+    def clean_campos_json(self):
+        try:
+            return etiquetas.normalizar_campos(json.loads(self.cleaned_data['campos_json']))
+        except json.JSONDecodeError:
+            raise forms.ValidationError('El diseño de la etiqueta no tiene un formato válido.')
+        except etiquetas.ConfiguracionInvalida as e:
+            raise forms.ValidationError(str(e))
+
+    def clean_logo_archivo(self):
+        archivo = self.cleaned_data.get('logo_archivo')
+        if not archivo:
+            return None
+        if archivo.size > etiquetas.LOGO_MAXIMO_BYTES:
+            raise forms.ValidationError('El logo no puede pesar más de 1 MB.')
+        contenido = archivo.read()
+        try:
+            etiquetas.validar_logo(contenido)
+        except etiquetas.ConfiguracionInvalida as e:
+            raise forms.ValidationError(str(e))
+        return contenido
+
+
+@admin.register(ConfiguracionEtiqueta)
+class ConfiguracionEtiquetaAdmin(admin.ModelAdmin):
+    """
+    Una sola fila (pk=1): la lista lleva directo al diseñador. Si todavía no existe,
+    el diseñador abre con los valores por defecto y la fila se crea al guardar.
+    """
+    form = ConfiguracionEtiquetaForm
+    change_form_template = 'admin/gestion_grabados/configuracionetiqueta/change_form.html'
+
+    def _es_superusuario(self, request):
+        return bool(request.user.is_active and request.user.is_superuser)
+
+    def has_module_permission(self, request):
+        return self._es_superusuario(request)
+
+    def has_view_permission(self, request, obj=None):
+        return self._es_superusuario(request)
+
+    def has_change_permission(self, request, obj=None):
+        return self._es_superusuario(request)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def get_object(self, request, object_id, from_field=None):
+        if str(object_id) != '1':
+            return None
+        return ConfiguracionEtiqueta.objects.filter(pk=1).first() or ConfiguracionEtiqueta(pk=1)
+
+    def changelist_view(self, request, extra_context=None):
+        if not self.has_change_permission(request):
+            return super().changelist_view(request, extra_context)   # 403 de Django
+        opciones = self.model._meta
+        return HttpResponseRedirect(
+            reverse(f'admin:{opciones.app_label}_{opciones.model_name}_change', args=[1]))
+
+    def render_change_form(self, request, context, *args, **kwargs):
+        # La vista previa sale con el diseño guardado; disenador_etiqueta.js la vuelve a
+        # acomodar con el campo oculto (así un POST con error no pierde lo movido).
+        context.update({
+            'config': selectors.configuracion_etiqueta(),
+            'datos': selectors.datos_etiqueta_prueba(),
+            'disenador': True,
+            'campos_por_defecto': etiquetas.CAMPOS_POR_DEFECTO,
+            'nombres_campos': etiquetas.NOMBRES_CAMPOS,
+            'limites': {'ancho': etiquetas.ANCHO_ETIQUETA, 'alto': etiquetas.ALTO_ETIQUETA,
+                        'tamano_min': etiquetas.TAMANO_MINIMO, 'tamano_max': etiquetas.TAMANO_MAXIMO,
+                        'medida_min': etiquetas.MEDIDA_MINIMA},
+        })
+        return super().render_change_form(request, context, *args, **kwargs)
+
+    def save_model(self, request, obj, form, change):
+        config = etiquetas.guardar_configuracion(
+            campos=form.cleaned_data['campos_json'],
+            usuario=request.user,
+            logo=form.cleaned_data.get('logo_archivo'),
+            quitar_logo=form.cleaned_data.get('quitar_logo', False),
+        )
+        obj.pk = config.pk

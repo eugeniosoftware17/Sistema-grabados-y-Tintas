@@ -5,6 +5,7 @@ from apps.core.permisos import proteger_urls
 from . import views
 from . import views_fabricacion
 from . import views_grabados
+from . import views_etiquetas
 from . import views_sobres
 
 
@@ -64,6 +65,11 @@ urlpatterns = [
     path('api/sobre/<int:sobre_id>/ubicacion/', views_sobres.api_sobre_ubicacion, name='api_sobre_ubicacion'),
     path('api/sobre/<int:sobre_id>/desactivar/', views_sobres.api_sobre_desactivar, name='api_sobre_desactivar'),
     path('api/sobre/<int:sobre_id>/reactivar/', views_sobres.api_sobre_reactivar, name='api_sobre_reactivar'),
+
+    # --- Etiqueta 6x4 con código de barras (ver views_etiquetas.py) ---
+    path('etiqueta/grabado/<int:grabado_id>/', views_etiquetas.etiqueta_grabado, name='etiqueta_grabado'),
+    path('etiqueta/sobre/<int:sobre_id>/', views_etiquetas.etiqueta_sobre, name='etiqueta_sobre'),
+    path('etiqueta/prueba/', views_etiquetas.etiqueta_prueba, name='etiqueta_prueba'),
 ]
 
 # Todas las rutas (páginas y APIs) exigen el permiso del módulo Grabados: sin él, 403.

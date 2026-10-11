@@ -68,7 +68,7 @@
                     border: 1px solid var(--color-borde); border-radius: 8px; background: #fff; color: #5a6b60;
                     cursor: pointer; }
     .inv-imprimir svg { width: 16px; height: 16px; fill: none; stroke: currentColor; }
-    .inv-imprimir:disabled { opacity: 0.45; cursor: not-allowed; }
+    .inv-imprimir:hover { background: #f0f9f4; color: #2d8a3e; }
 
     @media (max-width: 1024px) {
         .inv-tarjetas { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -227,5 +227,6 @@
 
 <script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
 <script src="{% static_v 'js/componentes/filtro_columna.js' %}"></script>
+<script src="{% static_v 'js/componentes/etiqueta.js' %}"></script>
 <script src="{% static_v 'js/inventario_grabados.js' %}"></script>
 {% endblock %}

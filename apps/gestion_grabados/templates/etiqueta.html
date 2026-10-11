@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Etiqueta {{ datos.codigo }}{% if prueba %} (prueba){% endif %} | CIGAR RINGS</title>
+{% include "etiquetas/_estilos.html" %}
+<style>
+    /* Página de la etiqueta (ver views_etiquetas.py): en pantalla, la etiqueta con borde y
+       una barra; al imprimir, solo la etiqueta a 6x4 sin márgenes. */
+    @page { size: 6in 4in; margin: 0; }
+    html, body { margin: 0; padding: 0; background: #eef1ef; font-family: Arial, Helvetica, sans-serif; }
+    .barra { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+             padding: 14px 16px; }
+    .barra p { margin: 0; color: #3d4a42; font-size: 14px; }
+    .barra button { padding: 8px 18px; border: 0; border-radius: 8px; background: #2d8a3e; color: #fff;
+                    font-size: 14px; cursor: pointer; }
+    .contenedor { display: flex; justify-content: center; padding: 0 16px 24px; overflow-x: auto; }
+    .contenedor .etiqueta { box-shadow: 0 0 0 1px #c5cdc8, 0 4px 16px rgba(0, 0, 0, 0.12); flex: none; }
+    @media print {
+        html, body { background: #fff; width: 6in; height: 4in; }
+        .barra { display: none; }
+        .contenedor { padding: 0; display: block; overflow: visible; }
+        .contenedor .etiqueta { box-shadow: none; page-break-after: avoid; break-after: avoid; }
+    }
+</style>
+</head>
+<body>
+  <div class="barra">
+    {% if prueba %}<p><strong>Página de prueba:</strong> datos de ejemplo con el diseño actual. Elige la impresora Zebra, tamaño 6x4 y márgenes "Ninguno".</p>{% endif %}
+    <button type="button" onclick="window.print()">Imprimir</button>
+  </div>
+  <div class="contenedor">
+    {% include "etiquetas/_contenido.html" %}
+  </div>
+  {% if imprimir %}<script>window.addEventListener('load', function () { window.print(); });</script>{% endif %}
+</body>
+</html>

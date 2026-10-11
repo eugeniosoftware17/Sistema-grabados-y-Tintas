@@ -301,7 +301,12 @@
         let htmlAcciones = `<div class="fila-acciones">
             <button class="boton-accion boton-accion--ver" onclick="window.abrirDetalleConsulta(${globalIdx})" title="Ver detalle">
                 <svg viewBox="0 0 24 24" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>`;
+            </button>
+            ${reg.grabado
+              ? `<button type="button" class="boton-accion boton-accion--etiqueta" data-etiqueta="${reg.grabado.id}"
+                         title="Imprimir etiqueta del grabado ${escaparHtml(reg.grabado.of_origen)} ${escaparHtml(reg.grabado.proceso)}">${window.Etiqueta.BOTON_SVG}</button>`
+              : `<button type="button" class="boton-accion boton-accion--etiqueta" disabled
+                         title="Sin grabado en EIS: no hay etiqueta que imprimir">${window.Etiqueta.BOTON_SVG}</button>`}`;
         if (isAdmin && reg.origen !== ORIGEN_NUEVO) {
           htmlAcciones += `
             <button class="boton-accion boton-accion--editar" onclick="window.editarRegistro(${globalIdx})" title="Editar en Admin">
@@ -741,6 +746,8 @@
     const cuerpoTabla = document.getElementById('tabla-cuerpo');
     if (cuerpoTabla) {
         cuerpoTabla.addEventListener('click', (e) => {
+            const etiqueta = e.target.closest('[data-etiqueta]');
+            if (etiqueta) { window.Etiqueta.imprimirGrabado(etiqueta.dataset.etiqueta); return; }
             // La ubicación (doble clic = editar) y los botones de acción no abren el panel.
             if (e.target.closest('.consulta-ubicacion, .fila-acciones')) return;
             const fila = e.target.closest('.consulta-fila');

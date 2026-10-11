@@ -100,14 +100,9 @@
                 <td data-label="Última modificación" class="inv-modificado">${escapar(g.actualizado_el)}</td>
                 <td data-label="Fecha de creación">${escapar(g.creado_el)}</td>
                 <td data-label="Acciones" class="inv-centrado">
-                    <!-- La etiqueta se imprime en el paso 3; por ahora el botón solo queda preparado. -->
-                    <button type="button" class="inv-imprimir" data-id="${g.id}" disabled
-                            title="Disponible próximamente" aria-label="Imprimir etiqueta (disponible próximamente)">
-                        <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="6 9 6 2 18 2 18 9"/>
-                            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/>
-                            <rect x="6" y="14" width="12" height="8"/>
-                        </svg>
+                    <button type="button" class="inv-imprimir" data-id="${g.id}" title="Imprimir etiqueta"
+                            aria-label="Imprimir etiqueta del grabado ${escapar(g.of_origen)} ${escapar(g.proceso)}">
+                        ${window.Etiqueta.BOTON_SVG}
                     </button>
                 </td>
             </tr>`).join('');
@@ -233,8 +228,10 @@
     $('inv-tipo').addEventListener('change', (e) => { filtros.tipo = e.target.value; cargar(); });
 
     cuerpo.addEventListener('click', (e) => {
-        // La celda de ubicación (doble clic = editar) y las acciones no abren el panel.
-        if (e.target.closest('.inv-ubicacion, .inv-imprimir')) return;
+        const imprimir = e.target.closest('.inv-imprimir');
+        if (imprimir) { window.Etiqueta.imprimirGrabado(imprimir.dataset.id); return; }
+        // La celda de ubicación (doble clic = editar) no abre el panel.
+        if (e.target.closest('.inv-ubicacion')) return;
         const fila = e.target.closest('.inv-fila');
         if (fila) abrirDetalle(Number(fila.dataset.id));
     });
