@@ -17,8 +17,12 @@
      PanelGrabado.recargar();
 
    Los botones Aprobar/Rechazar solo aparecen si la pantalla pasa `acciones`
-   y el grabado tiene un K1 pendiente (k1_actual). Cualquier usuario del
-   módulo puede decidir, incluso sobre una fabricación que registró él.
+   y el grabado tiene un K1 pendiente (k1_actual) y no está inactivo. Cualquier
+   usuario del módulo puede decidir, incluso sobre una fabricación que registró él.
+
+   Desactivar / Reactivar aparece siempre en el pie (un grabado nunca se elimina).
+   Después de un cambio el panel se recarga y avisa a la pantalla con el evento
+   `panelgrabado:cambio` en document (detail: {id, estado}) para que refresque su lista.
 
    `orden` es una fila de OrdenFabricacion tal como la devuelve
    /grabados/api/registros/ (of, ref, proceso, estado, cliente, desc, ...).
@@ -29,6 +33,9 @@
 
     const URL_DETALLE = (id) => `/grabados/api/grabado/${encodeURIComponent(id)}/detalle/`;
     const URL_HISTORIAL_OF = (of) => `/grabados/api/historial/${encodeURIComponent(of)}/`;
+    const URL_DESACTIVAR = (id) => `/grabados/api/grabado/${encodeURIComponent(id)}/desactivar/`;
+    const URL_REACTIVAR = (id) => `/grabados/api/grabado/${encodeURIComponent(id)}/reactivar/`;
+    const LARGO_MINIMO_MOTIVO = 5;   // services.LARGO_MINIMO_MOTIVO_DESACTIVACION
 
     let fondo = null;
     let panel = null;
@@ -53,6 +60,11 @@
             ? n.toLocaleString('es-DO', { maximumFractionDigits: 2 })
             : String(valor);
         return escapar(texto) + (unidad ? `<span class="pg-unidad">${escapar(unidad)}</span>` : '');
+    }
+
+    function getCookie(name) {
+        const match = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+        return match ? decodeURIComponent(match[2]) : null;
     }
 
     function etiqueta(codigo, texto) {
@@ -91,12 +103,48 @@
             : 'Grabado migrado del sistema anterior: nunca pasó K1 en EIS.';
     }
 
+    function htmlDesactivacion(d) {
+        const x = d.desactivacion;
+        if (!x) return '';
+        return `<section class="pg-seccion pg-seccion--inactivo">
+            <h3 class="pg-seccion__titulo">Grabado inactivo</h3>
+            <dl class="pg-datos">
+                ${dato('Desactivado por', escapar(x.por))}
+                ${dato('Fecha', escapar(x.el))}
+                ${dato('Al reactivar vuelve a', etiqueta(x.estado_previo, x.estado_previo_display))}
+                ${dato('Motivo', escapar(x.motivo), true)}
+            </dl>
+        </section>`;
+    }
+
+    function htmlHistorialActivaciones(d) {
+        const cambios = d.historial_activaciones || [];
+        if (!cambios.length) return '';
+        const items = cambios.map(c => {
+            const desactivo = c.accion === 'DESACTIVAR';
+            return `
+            <li class="pg-item">
+                <div class="pg-item__linea">
+                    <span class="pg-item__titulo">${escapar(c.accion_display)}</span>
+                    ${desactivo ? etiqueta('neutra', 'Estaba en ' + c.estado_display) : etiqueta(c.estado, 'Volvió a ' + c.estado_display)}
+                </div>
+                <div class="pg-item__meta">${escapar(c.fecha)} · por ${escapar(c.usuario)}</div>
+                ${c.motivo ? `<div class="pg-item__motivo"><strong>Motivo:</strong> ${escapar(c.motivo)}</div>` : ''}
+            </li>`;
+        }).join('');
+        return seccion('Historial de activación', `<ul class="pg-lista">${items}</ul>`);
+    }
+
     function htmlK1Actual(d) {
         const k1 = d.k1_actual;
         if (!k1) {
             const texto = d.tipo === 'K1' ? 'Este grabado no tiene un K1 pendiente.' : sinK1(d);
             return seccion('K1 actual', `<p class="pg-vacio">${escapar(texto)}</p>`);
         }
+        const aviso = d.inactivo
+            ? '<p class="pg-vacio" style="margin-top:10px;">No se puede decidir mientras el grabado esté inactivo: '
+              + 'no aparece en K1 Pendientes hasta que lo reactives.</p>'
+            : '';
         return seccion('K1 actual', `
             <dl class="pg-datos">
                 ${dato('Intento', escapar(k1.intento))}
@@ -104,7 +152,7 @@
                 ${dato('Resultado', etiqueta(k1.resultado, k1.resultado_display))}
                 ${dato('Registrado por', escapar(k1.creado_por))}
                 ${dato('Fecha', escapar(k1.creado_el))}
-            </dl>`);
+            </dl>${aviso}`);
     }
 
     function htmlTecnicos(t) {
@@ -299,8 +347,9 @@
         panel.querySelector('.pg-cabecera__subtitulo').textContent = d.cliente || '';
         panel.querySelector('.pg-cuerpo').innerHTML =
             (ordenActual ? htmlOrden(ordenActual) : '') +
-            htmlEncabezado(d) + htmlK1Actual(d) + htmlTecnicosActuales(d) +
+            htmlEncabezado(d) + htmlDesactivacion(d) + htmlK1Actual(d) + htmlTecnicosActuales(d) +
             htmlFabricaciones(d) + htmlIntentosK1(d) + htmlEnvios(d) + htmlHistorialUbicaciones(d) +
+            htmlHistorialActivaciones(d) +
             `<p class="pg-solo-impresion">Reporte generado el ${escapar(new Date().toLocaleString('es-DO'))}</p>`;
         renderizarAcciones(d);
     }
@@ -308,9 +357,10 @@
     function renderizarAcciones(d) {
         const pie = panel.querySelector('.pg-pie');
         pie.innerHTML = '';
+        pie.append(botonActivacion(d));
         const acciones = opcionesActuales.acciones;
         const k1 = d.k1_actual;
-        if (!acciones || !k1) return;
+        if (!acciones || !k1 || d.inactivo) return;
 
         const rechazar = document.createElement('button');
         rechazar.type = 'button';
@@ -325,6 +375,83 @@
         aprobar.addEventListener('click', () => acciones.onAprobar && acciones.onAprobar(k1, d));
 
         pie.append(rechazar, aprobar);
+    }
+
+    // ------------------------------------------------- desactivar / reactivar
+    function boton(texto, clase, alHacerClic) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'pg-boton ' + clase;
+        b.textContent = texto;
+        b.addEventListener('click', alHacerClic);
+        return b;
+    }
+
+    function botonActivacion(d) {
+        if (d.inactivo) {
+            return boton('Reactivar', 'pg-boton--reactivar',
+                         (e) => cambiarActivacion(d, URL_REACTIVAR(d.id), {}, e.currentTarget, null));
+        }
+        const desactivar = boton('Desactivar', 'pg-boton--desactivar', () => mostrarFormDesactivar(d));
+        if (!d.puede_desactivar) {
+            desactivar.disabled = true;
+            desactivar.title = 'El grabado está en máquina: recógelo desde el PLANI antes de desactivarlo.';
+        }
+        return desactivar;
+    }
+
+    function mostrarFormDesactivar(d) {
+        const pie = panel.querySelector('.pg-pie');
+        pie.innerHTML = `
+            <div class="pg-form-desactivar">
+                <label for="pg-motivo-desactivar" class="pg-form-desactivar__etiqueta">
+                    Motivo de la desactivación (obligatorio)</label>
+                <textarea id="pg-motivo-desactivar" rows="2" maxlength="500"
+                          placeholder="Ej.: grabado dañado, el cliente ya no lo usa..."></textarea>
+                <p class="pg-form-desactivar__error" role="alert"></p>
+            </div>`;
+        const motivo = pie.querySelector('textarea');
+        const error = pie.querySelector('.pg-form-desactivar__error');
+        const cancelar = boton('Cancelar', 'pg-boton--neutro', () => renderizarAcciones(d));
+        const confirmar = boton('Confirmar desactivación', 'pg-boton--desactivar', () => {
+            const texto = motivo.value.trim();
+            if (texto.length < LARGO_MINIMO_MOTIVO) {
+                error.textContent = `Escribe el motivo (al menos ${LARGO_MINIMO_MOTIVO} caracteres).`;
+                motivo.focus();
+                return;
+            }
+            cambiarActivacion(d, URL_DESACTIVAR(d.id), { motivo: texto }, confirmar, error);
+        });
+        pie.append(cancelar, confirmar);
+        motivo.focus();
+    }
+
+    function cambiarActivacion(d, url, cuerpo, botonUsado, error) {
+        botonUsado.disabled = true;
+        const mostrarError = (mensaje) => {
+            botonUsado.disabled = false;
+            if (error) { error.textContent = mensaje; return; }
+            botonUsado.title = mensaje;
+            const aviso = document.createElement('p');
+            aviso.className = 'pg-form-desactivar__error';
+            aviso.setAttribute('role', 'alert');
+            aviso.textContent = mensaje;
+            botonUsado.before(aviso);
+        };
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json',
+                       'X-CSRFToken': getCookie('csrftoken') },
+            body: JSON.stringify(cuerpo),
+        })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status !== 'ok') { mostrarError(res.message || 'No se pudo cambiar el grabado.'); return; }
+                document.dispatchEvent(new CustomEvent('panelgrabado:cambio',
+                                                       { detail: { id: d.id, estado: res.estado } }));
+                recargar();
+            })
+            .catch(() => mostrarError('Error de conexión. Vuelve a intentarlo.'));
     }
 
     function mostrarCarga() {

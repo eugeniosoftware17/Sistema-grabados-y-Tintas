@@ -2,7 +2,7 @@ from django.contrib import admin
 from .models import (
     OrdenFabricacion, EstadoBano,
     Maquina, Grabado, FabricacionGrabado, PruebaK1, EnvioMaquina, LegadoOrden,
-    HistorialUbicacion,
+    HistorialUbicacion, HistorialActivacion,
 )
 
 @admin.register(EstadoBano)
@@ -85,9 +85,15 @@ class GrabadoAdmin(admin.ModelAdmin):
                     'usos_acumulados', 'tipo', 'actualizado_el')
     list_filter = ('proceso', 'estado', 'tipo', 'datos_manuales')
     search_fields = ('of_origen', 'cliente', 'referencia', 'sobre')
-    # La ubicación solo cambia por services.grabados.cambiar_ubicacion (con historial).
-    readonly_fields = ('ubicacion', 'creado_por', 'creado_el', 'actualizado_el')
+    # La ubicación solo cambia por services.grabados.cambiar_ubicacion (con historial) y la
+    # desactivación por services.grabados.desactivar_grabado / reactivar_grabado.
+    readonly_fields = ('ubicacion', 'desactivado_por', 'desactivado_el', 'motivo_desactivacion',
+                       'estado_previo', 'creado_por', 'creado_el', 'actualizado_el')
     inlines = [FabricacionGrabadoInline, PruebaK1Inline, EnvioMaquinaInline]
+
+    def has_delete_permission(self, request, obj=None):
+        # Un grabado nunca se elimina: se desactiva desde su panel de detalle.
+        return False
 
 
 @admin.register(FabricacionGrabado)
@@ -128,6 +134,24 @@ class HistorialUbicacionAdmin(admin.ModelAdmin):
         return False
 
     def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(HistorialActivacion)
+class HistorialActivacionAdmin(admin.ModelAdmin):
+    """Solo lectura: lo escriben services.grabados.desactivar_grabado / reactivar_grabado."""
+    list_display = ('grabado', 'accion', 'estado', 'motivo', 'usuario', 'fecha')
+    list_filter = ('accion',)
+    search_fields = ('grabado__of_origen', 'motivo')
+    list_select_related = ('grabado', 'usuario')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
         return False
 
 

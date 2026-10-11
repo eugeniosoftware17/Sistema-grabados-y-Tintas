@@ -1,5 +1,8 @@
 
-/* Tabla de Consultas (histórico de OrdenFabricacion).
+/* Tabla de Consultas: filas de OrdenFabricacion ("Sistema anterior") y grabados
+   creados en EIS sin migración ("Nuevo"), en una sola lista (columna Origen).
+   - Filas "Nuevo": traen siempre reg.grabado; sin botones Editar/Eliminar (son de
+     OrdenFabricacion) y el panel se abre solo con el grabado.
    - Clic (o Enter) en una fila: panel de detalle PanelGrabado. Si la OF tiene
      grabado enlazado (api_registros: reg.grabado) se abre el grabado con los
      datos de la orden; si no, solo la orden y su historial (api_historial).
@@ -35,7 +38,7 @@
 
     // Filtros por columna estilo Excel (todas las columnas de datos, salvo "acciones")
     const COLUMNAS_FILTRABLES = [
-        'of', 'ref', 'cliente', 'desc', 'estado', 'fecha', 'fecha_reg',
+        'of', 'origen', 'ref', 'cliente', 'desc', 'estado', 'fecha', 'fecha_reg',
         'proceso', 'maquina', 'tipo', 'ubicacion', 'sobre', 'cantidad',
         'horas', 'responsables', 'peso_i', 'peso_f', 'perdida', 'temp',
         'rpm', 'tiempo_t', 'comp'
@@ -61,6 +64,7 @@
 
     const NOMBRES_COLUMNAS = {
       of        : 'OF',
+      origen    : 'Origen',
       ref       : 'OF Referencia',
       cliente   : 'Cliente',
       desc      : 'Descripción',
@@ -94,8 +98,14 @@
       'COMPLETADO' : 'estado--completado',
       'CANCELADO'  : 'estado--cancelado',
       'REVISION'   : 'estado--en-revision',
-      'REPETIR'    : 'estado--cancelado'
+      'REPETIR'    : 'estado--cancelado',
+      // Estados de Grabado (filas "Nuevo")
+      'EN_FABRICACION': 'estado--en-proceso',
+      'PENDIENTE_K1'  : 'estado--en-revision',
+      'APROBADO'      : 'estado--completado',
+      'INACTIVO'      : 'estado--inactivo'
     };
+    const ORIGEN_NUEVO = 'Nuevo';
 
     const SVG_CANDADO = `<svg viewBox="0 0 24 24" stroke-width="2"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>`;
     const SVG_PIN = `<svg viewBox="0 0 24 24" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>`;
@@ -275,7 +285,7 @@
       if (!tbody) return;
       
       if (pagina.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="24" class="tabla-sin-resultados">No se encontraron registros.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="25" class="tabla-sin-resultados">No se encontraron registros.</td></tr>`;
         return;
       }
 
@@ -287,7 +297,7 @@
             <button class="boton-accion boton-accion--ver" onclick="window.abrirDetalleConsulta(${globalIdx})" title="Ver detalle">
                 <svg viewBox="0 0 24 24" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>`;
-        if (isAdmin) {
+        if (isAdmin && reg.origen !== ORIGEN_NUEVO) {
           htmlAcciones += `
             <button class="boton-accion boton-accion--editar" onclick="window.editarRegistro(${globalIdx})" title="Editar en Admin">
                 <svg viewBox="0 0 24 24" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -301,6 +311,7 @@
         return `
         <tr class="consulta-fila" tabindex="0" data-idx="${globalIdx}">
           <td data-col="of"><span class="celda-of-enlace">${resaltarTexto(reg.of, palabrasBusqueda)}</span></td>
+          <td data-col="origen"><span class="consulta-origen ${reg.origen === ORIGEN_NUEVO ? 'consulta-origen--nuevo' : ''}">${escaparHtml(reg.origen)}</span></td>
           <td data-col="ref"><span class="celda-of-referencia">${resaltarTexto(reg.ref, palabrasBusqueda)}</span></td>
           <td data-col="cliente"><span class="celda-cliente">${resaltarTexto(reg.cliente, palabrasBusqueda)}</span></td>
           <td data-col="desc"><span class="celda-descripcion" title="${reg.desc}">${resaltarTexto(reg.desc, palabrasBusqueda)}</span></td>
@@ -331,7 +342,18 @@
       aplicarVisibilidadColumnas();
     }
 
+    const MOTIVO_GRABADO_INACTIVO = 'Grabado inactivo: reactívalo desde su panel para cambiar la ubicación.';
+
+    function grabadoInactivo(reg) {
+      return Boolean(reg.grabado && reg.grabado.estado === 'INACTIVO');
+    }
+
     function htmlCeldaUbicacion(reg) {
+      if (grabadoInactivo(reg)) {
+        return `<td data-col="ubicacion" class="consulta-ubicacion consulta-ubicacion--bloqueada" tabindex="0"
+                    title="${escaparHtml(MOTIVO_GRABADO_INACTIVO)}">
+                  <span class="celda-ubicacion">${SVG_CANDADO}${resaltarTexto(reg.ubicacion, palabrasBusqueda)}</span></td>`;
+      }
       if (reg.grabado) {
         return `<td data-col="ubicacion" class="consulta-ubicacion" tabindex="0"
                     title="Ubicación del grabado ${escaparHtml(reg.grabado.of_origen)} ${escaparHtml(reg.grabado.proceso)}. Doble clic para editarla">
@@ -629,7 +651,8 @@
     window.abrirDetalleConsulta = function(idx) {
         const reg = registrosFiltrados[idx];
         if (!reg) return;
-        if (reg.grabado) window.PanelGrabado.abrir(reg.grabado.id, { orden: reg });
+        if (reg.origen === ORIGEN_NUEVO) window.PanelGrabado.abrir(reg.grabado.id);
+        else if (reg.grabado) window.PanelGrabado.abrir(reg.grabado.id, { orden: reg });
         else window.PanelGrabado.abrirOrden(reg);
     };
 
@@ -640,8 +663,9 @@
         aviso.className = 'consulta-ubicacion__error';
         aviso.setAttribute('role', 'alert');
         // Texto corto para no estirar la fila; el motivo completo queda en el tooltip (title).
-        aviso.textContent = 'Sin grabado en EIS';
-        aviso.title = reg.motivo_sin_grabado;
+        const inactivo = grabadoInactivo(reg);
+        aviso.textContent = inactivo ? 'Grabado inactivo' : 'Sin grabado en EIS';
+        aviso.title = inactivo ? MOTIVO_GRABADO_INACTIVO : reg.motivo_sin_grabado;
         celda.appendChild(aviso);
         setTimeout(() => aviso.remove(), 5000);
     }
@@ -650,7 +674,7 @@
         if (celda.querySelector('input')) return;
         const reg = registrosFiltrados[Number(celda.closest('.consulta-fila').dataset.idx)];
         if (!reg) return;
-        if (!reg.grabado) { mostrarMotivoBloqueo(celda, reg); return; }
+        if (!reg.grabado || grabadoInactivo(reg)) { mostrarMotivoBloqueo(celda, reg); return; }
 
         const grabado = reg.grabado;
         const contenidoOriginal = celda.innerHTML;
@@ -732,6 +756,9 @@
             }
         });
     }
+
+    // Desactivar / reactivar desde el panel cambia el estado de la fila y las tarjetas.
+    document.addEventListener('panelgrabado:cambio', cargarDatosDesdeDB);
 
     /* --- Cierre de paneles desplegables (clic afuera / exclusión mutua) --- */
     const PANELES_DESPLEGABLES = [

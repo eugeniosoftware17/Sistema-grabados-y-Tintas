@@ -139,6 +139,7 @@ body.pg-bloqueo-scroll { overflow: hidden; }
 .pg-etiqueta--REPETIR,
 .pg-etiqueta--RECHAZADO      { background: #f8d7da; color: #842029; }
 .pg-etiqueta--neutra         { background: #eef2ef; color: #4a5a50; }
+.pg-etiqueta--INACTIVO       { background: #e2e3e5; color: #41464b; }
 
 /* Tipo de grabado (Grabado.tipo): con borde, para no confundirlas con el estado. */
 .pg-etiqueta--tipo-K1,
@@ -198,6 +199,32 @@ body.pg-bloqueo-scroll { overflow: hidden; }
 .pg-boton:disabled { opacity: 0.6; cursor: wait; }
 .pg-boton--aprobar { background: #2d8a3e; }
 .pg-boton--rechazar { background: #d32f2f; }
+
+/* Desactivar / Reactivar: a la izquierda del pie, separado de las acciones de K1. */
+.pg-boton--desactivar,
+.pg-boton--reactivar,
+.pg-boton--neutro { background: #fff; border: 1px solid; }
+.pg-boton--desactivar { color: #842029; border-color: #e3a5ab; }
+.pg-boton--reactivar  { color: #0a5c36; border-color: #8fc9a5; }
+.pg-boton--neutro     { color: #4a5a50; border-color: #c8d2cb; }
+.pg-pie > .pg-boton--desactivar:first-child,
+.pg-pie > .pg-boton--reactivar:first-child { margin-right: auto; }
+.pg-boton--desactivar:disabled { cursor: not-allowed; }
+.pg-form-desactivar { flex: 1 1 100%; }
+.pg-form-desactivar__etiqueta { display: block; font-size: 12.5px; font-weight: 700; margin-bottom: 5px; }
+.pg-form-desactivar textarea {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #c8d2cb;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 14px;
+    resize: vertical;
+}
+.pg-form-desactivar__error { color: #d32f2f; font-size: 12.5px; margin: 4px 0 0; flex: 1 1 100%; }
+.pg-form-desactivar__error:empty { display: none; }
+.pg-seccion--inactivo { border-color: #c8d2cb; background: #f4f6f5; }
 
 .pg-solo-impresion { display: none; }
 

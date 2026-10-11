@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static estaticos %}
 
-{% block title %}Registro de Grabados (Histórico) | CIGAR RINGS{% endblock %}
+{% block title %}Registro de Órdenes y Grabados | CIGAR RINGS{% endblock %}
 
 {% block extra_css %}
 <link rel="stylesheet" href="{% static 'css/grabados_tabla.css' %}">
@@ -16,6 +16,10 @@
     .consulta-fila:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
     /* Ubicación del grabado: doble clic para editar. */
     .consulta-ubicacion { cursor: text; white-space: nowrap; }
+    /* Columna Origen: "Sistema anterior" (OrdenFabricacion) o "Nuevo" (grabado de EIS). */
+    .consulta-origen { font-size: 11px; color: #6b7280; white-space: nowrap; }
+    .consulta-origen--nuevo { display: inline-block; padding: 1px 8px; border-radius: 10px;
+                              background: #e6f4ea; color: #1e5d2b; font-weight: 600; }
     .consulta-ubicacion:hover { background: #f0f9f4; }
     .consulta-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
     .consulta-ubicacion--bloqueada { cursor: not-allowed; color: #7a9485; }
@@ -43,7 +47,7 @@
         <svg viewBox="0 0 24 24" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/>
         </svg>
-        Registro de Órdenes de Fabricación (Histórico)
+        Registro de Órdenes y Grabados
       </div>
     </div>
 
@@ -90,6 +94,10 @@
               <option value="COMPLETADO">Completado</option>
               <option value="REVISION">En Revisión</option>
               <option value="REPETIR">Para Repetir</option>
+              <option value="EN_FABRICACION">En Fabricación (nuevo)</option>
+              <option value="PENDIENTE_K1">Pendiente de K1 (nuevo)</option>
+              <option value="APROBADO">Aprobado (nuevo)</option>
+              <option value="INACTIVO">Inactivo (nuevo)</option>
             </select>
           </div>
           <div style="margin-bottom:10px;">
@@ -156,6 +164,12 @@
                 <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
               </button>
               <span id="indicador-filtro-of" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
+            </th>
+            <th data-col="origen" title="Sistema anterior (OrdenFabricacion) o Nuevo (grabado creado en EIS)">Origen <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
+              <button type="button" class="boton-filtro-columna" data-columna="origen" title="Filtrar Origen">
+                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
+              </button>
+              <span id="indicador-filtro-origen" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
             </th>
             <th data-col="ref">OF Ref. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
               <button type="button" class="boton-filtro-columna" data-columna="ref" title="Filtrar OF Ref.">

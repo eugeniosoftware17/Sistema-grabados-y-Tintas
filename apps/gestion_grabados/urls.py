@@ -50,6 +50,10 @@ urlpatterns = [
     path('api/inventario/', views_grabados.api_inventario, name='api_inventario'),
     path('api/grabado/<int:grabado_id>/ubicacion/', views_grabados.api_grabado_ubicacion,
          name='api_grabado_ubicacion'),
+    path('api/grabado/<int:grabado_id>/desactivar/', views_grabados.api_grabado_desactivar,
+         name='api_grabado_desactivar'),
+    path('api/grabado/<int:grabado_id>/reactivar/', views_grabados.api_grabado_reactivar,
+         name='api_grabado_reactivar'),
 ]
 
 # Todas las rutas (páginas y APIs) exigen el permiso del módulo Grabados: sin él, 403.

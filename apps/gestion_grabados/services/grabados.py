@@ -17,8 +17,8 @@ from django.db.models import F, Max, Q
 from django.utils import timezone
 
 from ..models import (
-    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialUbicacion, Maquina,
-    OrdenFabricacion, PruebaK1,
+    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion,
+    Maquina, OrdenFabricacion, PruebaK1,
 )
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
@@ -41,6 +41,8 @@ TIPO_DIRECTO = 'DIRECTO'
 TIPOS_CREABLES = (TIPO_K1, TIPO_DIRECTO)
 
 LARGO_MINIMO_MOTIVO_RECHAZO = 5
+
+ESTADO_INACTIVO = 'INACTIVO'
 
 
 class ErrorGrabado(Exception):
@@ -201,6 +203,12 @@ def evaluar_alta(of_origen, proceso, info_externa, normalizar_of, grabado=None, 
             resultado['accion'] = ACCION_RECHAZO_K1
         elif grabado.estado == 'REPETIR':
             resultado['accion'] = ACCION_REPETICION
+        elif grabado.estado == ESTADO_INACTIVO:
+            resultado.update(
+                bloqueo=BLOQUEO_ESTADO,
+                mensaje='Este grabado está inactivo: reactívalo desde su panel de detalle '
+                        'antes de registrar una fabricación.',
+            )
         else:
             resultado.update(
                 bloqueo=BLOQUEO_ESTADO,
@@ -395,6 +403,8 @@ def decidir_k1(*, prueba_id, usuario, aprobar, motivo=None):
 
         if prueba.resultado != 'PENDIENTE':
             raise TransicionInvalida(f'Este K1 ya fue {prueba.get_resultado_display().lower()}.')
+        if grabado.estado == ESTADO_INACTIVO:
+            raise TransicionInvalida('El grabado está inactivo: reactívalo para decidir su K1.')
         if grabado.estado != 'PENDIENTE_K1':
             raise TransicionInvalida(f'El grabado está en estado "{grabado.get_estado_display()}", '
                                      'no en "Pendiente de K1".')
@@ -494,6 +504,9 @@ def mandar_a_maquina(*, of, proceso, grabado_id, fila, usuario):
             if grabado.proceso != proceso:
                 raise ErrorGrabado(f'El grabado {grabado.of_origen} es de {grabado.proceso}, '
                                    f'no de {proceso}.')
+            if grabado.estado == ESTADO_INACTIVO:
+                raise TransicionInvalida(f'El grabado {grabado.of_origen} {grabado.proceso} está inactivo: '
+                                         'no se puede mandar a máquina.')
             if grabado.estado != 'APROBADO':
                 raise TransicionInvalida(f'El grabado {grabado.of_origen} {grabado.proceso} está en '
                                          f'"{grabado.get_estado_display()}": solo se manda a máquina '
@@ -605,6 +618,8 @@ def cambiar_ubicacion(*, grabado_id, ubicacion, usuario, origen=ORIGEN_INVENTARI
             grabado = Grabado.objects.select_for_update().get(pk=grabado_id)
         except (Grabado.DoesNotExist, ValueError, TypeError):
             raise GrabadoNoExiste('El grabado no existe.')
+        if grabado.estado == ESTADO_INACTIVO:
+            raise TransicionInvalida('El grabado está inactivo: no se puede cambiar su ubicación.')
 
         grabado.ubicacion_cambio = grabado.ubicacion != ubicacion
         if grabado.ubicacion_cambio:
@@ -614,4 +629,64 @@ def cambiar_ubicacion(*, grabado_id, ubicacion, usuario, origen=ORIGEN_INVENTARI
             )
             grabado.ubicacion = ubicacion
             grabado.save(update_fields=['ubicacion', 'actualizado_el'])
+    return grabado
+
+
+# ------------------------------------------------------- activación
+# Un grabado nunca se elimina: se desactiva y se puede reactivar. Mientras está
+# INACTIVO no se manda a máquina, no cambia de ubicación y su K1 pendiente (si
+# lo tiene) no aparece ni se puede decidir; al reactivar vuelve al estado previo.
+LARGO_MINIMO_MOTIVO_DESACTIVACION = 5
+
+
+def _grabado_bloqueado(grabado_id):
+    try:
+        return Grabado.objects.select_for_update().get(pk=grabado_id)
+    except (Grabado.DoesNotExist, ValueError, TypeError):
+        raise GrabadoNoExiste('El grabado no existe.')
+
+
+def desactivar_grabado(*, grabado_id, motivo, usuario):
+    """Pasa el grabado a INACTIVO guardando quién, cuándo, el motivo y el estado
+    previo (para reactivarlo). Un grabado en máquina no se puede desactivar."""
+    motivo = _texto(motivo)
+    if len(motivo) < LARGO_MINIMO_MOTIVO_DESACTIVACION:
+        raise ErrorGrabado(f'El motivo de la desactivación es obligatorio '
+                           f'(al menos {LARGO_MINIMO_MOTIVO_DESACTIVACION} caracteres).')
+    with transaction.atomic():
+        grabado = _grabado_bloqueado(grabado_id)
+        if grabado.estado == ESTADO_INACTIVO:
+            raise TransicionInvalida('El grabado ya está inactivo.')
+        if grabado.estado == 'EN_MAQUINA':
+            raise TransicionInvalida('El grabado está en máquina: recógelo desde el PLANI '
+                                     'antes de desactivarlo.')
+        grabado.estado_previo = grabado.estado
+        grabado.estado = ESTADO_INACTIVO
+        grabado.desactivado_por = usuario
+        grabado.desactivado_el = timezone.now()
+        grabado.motivo_desactivacion = motivo
+        grabado.save(update_fields=['estado', 'estado_previo', 'desactivado_por', 'desactivado_el',
+                                    'motivo_desactivacion', 'actualizado_el'])
+        HistorialActivacion.objects.create(grabado=grabado, accion='DESACTIVAR', motivo=motivo,
+                                           estado=grabado.estado_previo, usuario=usuario)
+    return grabado
+
+
+def reactivar_grabado(*, grabado_id, usuario):
+    """Devuelve un grabado INACTIVO a su estado previo y limpia los datos de la
+    desactivación (el rastro queda en HistorialActivacion)."""
+    with transaction.atomic():
+        grabado = _grabado_bloqueado(grabado_id)
+        if grabado.estado != ESTADO_INACTIVO:
+            raise TransicionInvalida(f'El grabado no está inactivo (está en "{grabado.get_estado_display()}").')
+        # Sin estado previo (dato corrupto) vuelve a APROBADO, el estado de reposo.
+        grabado.estado = grabado.estado_previo or 'APROBADO'
+        grabado.estado_previo = ''
+        grabado.desactivado_por = None
+        grabado.desactivado_el = None
+        grabado.motivo_desactivacion = ''
+        grabado.save(update_fields=['estado', 'estado_previo', 'desactivado_por', 'desactivado_el',
+                                    'motivo_desactivacion', 'actualizado_el'])
+        HistorialActivacion.objects.create(grabado=grabado, accion='REACTIVAR',
+                                           estado=grabado.estado, usuario=usuario)
     return grabado

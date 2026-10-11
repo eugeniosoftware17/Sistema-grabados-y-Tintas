@@ -13,6 +13,7 @@ from . import selectors
 from .models import OrdenFabricacion, EstadoBano
 from django.db import connections
 from django.db.models import F, Q
+from django.utils import timezone
 
 # La FileMaker Data API (CRDAPS10) usa un certificado autofirmado; se acepta el
 # mismo riesgo de MITM en LAN que ya asume la conexión a SQL Server (TrustServerCertificate=yes).
@@ -288,7 +289,32 @@ def _serializar_registros(queryset):
             r['grabado_mod'] = enlace['grabado']['actualizado_el']
         else:
             r['grabado_mod'] = None
+        r['origen'] = selectors.ORIGEN_ANTERIOR
     return registros
+
+
+def _serializar_grabados_nuevos(grabados):
+    """Filas "Nuevo" de la Tabla de Consultas (grabados sin LegadoOrden), con las mismas
+    claves que las de OrdenFabricacion; lo que el grabado no tiene va vacío."""
+    vacias = ('ref', 'maquina', 'cantidad', 'horas', 'responsables', 'peso_i', 'peso_f',
+              'perdida', 'temp', 'rpm', 'tiempo_t', 'comp', 'foto_dano')
+    filas = []
+    for g in grabados:
+        modificado = selectors.formatear_fecha(g['actualizado_el'])
+        fila = dict.fromkeys(vacias)
+        fila.update({
+            'id': f"g{g['id']}",
+            'origen': selectors.ORIGEN_NUEVO,
+            'of': g['of_origen'], 'cliente': g['cliente'], 'desc': g['referencia'],
+            'tipo': g['tipo'], 'proceso': g['proceso'], 'estado': g['estado'],
+            'fecha': '—', 'fecha_reg': timezone.localtime(g['creado_el']).strftime('%d/%m/%Y'),
+            'ubicacion': g['ubicacion'], 'sobre': g['sobre'], 'usos_acumulados': g['usos_acumulados'],
+            'grabado': {'id': g['id'], 'of_origen': g['of_origen'], 'proceso': g['proceso'],
+                        'ubicacion': g['ubicacion'], 'estado': g['estado'], 'actualizado_el': modificado},
+            'enlace': None, 'motivo_sin_grabado': None, 'grabado_mod': modificado,
+        })
+        filas.append(fila)
+    return filas
 
 
 @login_required
@@ -314,7 +340,8 @@ def api_obtener_registros(request):
 @login_required
 def api_consulta_registros(request):
     """Tabla de Consultas: búsqueda (`q`) y filtros (`filtros`, JSON) sobre todo el
-    historial, las LIMITE_CONSULTA más recientes por fecha de registro."""
+    historial (OrdenFabricacion + grabados nuevos), las LIMITE_CONSULTA más recientes
+    por fecha de registro."""
     try:
         filtros = json.loads(request.GET.get('filtros') or '[]')
         resultado = selectors.consulta_ordenes(request.GET.get('q', '').strip(), filtros)
@@ -322,8 +349,11 @@ def api_consulta_registros(request):
         return JsonResponse({'status': 'error', 'message': 'Filtros inválidos.'}, status=400)
     except selectors.FiltroConsultaInvalido as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
+    filas = {(selectors.ORIGEN_ANTERIOR, r['id']): r for r in _serializar_registros(resultado['ordenes'])}
+    filas.update({(selectors.ORIGEN_NUEVO, g['grabado']['id']): g
+                  for g in _serializar_grabados_nuevos(resultado['grabados'])})
     return JsonResponse({'status': 'ok', 'total': resultado['total'], 'limite': resultado['limite'],
-                         'data': _serializar_registros(resultado['ordenes'])})
+                         'data': [filas[clave] for clave in resultado['secuencia']]})
 
 
 @login_required
@@ -383,23 +413,10 @@ def api_estadisticas_detalladas(request):
         }
     })
 
-# API para obtener KPIs del Dashboard
+# Tarjetas de la Tabla de Consultas (sistema anterior + nuevo, ver selectors.kpis_consulta)
 @login_required
 def api_dashboard_kpis(request):
-    from django.utils import timezone
-    from django.db.models import Q
-    hoy = timezone.now().date()
-    
-    kpis = {
-        'en_maquina': OrdenFabricacion.objects.filter(estado='EN_MAQUINA').count(),
-        'completados_hoy': OrdenFabricacion.objects.filter(
-            Q(estado='COMPLETADO') | Q(estado='REPETIR'),
-            actualizado_el__date=hoy
-        ).count(),
-        'para_repetir': OrdenFabricacion.objects.filter(estado='REPETIR').count(),
-        'pendientes': OrdenFabricacion.objects.filter(estado='PENDIENTE').count(),
-    }
-    return JsonResponse(kpis)
+    return JsonResponse(selectors.kpis_consulta(timezone.now().date()))
 
 @login_required
 def api_historial_orden(request, of_numero):

@@ -225,6 +225,9 @@
             case 'EN_MAQUINA_OTRA':
                 return tarjeta({ estado: ['EN_MAQUINA', 'En máquina'], grabado: g,
                                  nota: { icono: 'reloj', texto: e.mensaje } });   // ya nombra la OF que lo tiene
+            case 'INACTIVO':
+                return tarjeta({ estado: estadoGrabado, grabado: g,
+                                 nota: { icono: 'alerta', texto: e.mensaje } });
             case 'REFABRICAR':
                 return tarjeta({
                     estado: estadoGrabado, grabado: g, nota: notaGrabadoDeOtra(g),
@@ -462,6 +465,8 @@
 
     // --------------------------------------------------------------- eventos
     $('btn-sincronizar').addEventListener('click', () => sincronizar(false));
+    // Desactivar / reactivar desde el panel cambia la acción de la fila.
+    document.addEventListener('panelgrabado:cambio', () => sincronizar(true));
     $('btn-exportar').addEventListener('click', exportar);
     $('buscador-input').addEventListener('input', debounce(aplicarBusqueda, 200));
 

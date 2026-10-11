@@ -21,13 +21,13 @@ from django.contrib.auth.models import Group, Permission, User
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db.models import F
-from django.test import Client, TestCase, override_settings
+from django.test import Client, RequestFactory, TestCase, override_settings
 from django.urls import reverse
 
 from apps.gestion_grabados import selectors
 from apps.gestion_grabados.models import (
-    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialUbicacion, LegadoOrden, Maquina,
-    OrdenFabricacion, PruebaK1,
+    EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion,
+    LegadoOrden, Maquina, OrdenFabricacion, PruebaK1,
 )
 from apps.gestion_grabados.services import grabados as servicio
 from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
@@ -845,6 +845,7 @@ class InventarioGrabadosTests(BaseGrabados):
         res = self.api()
         self.assertEqual(res['conteos'], {
             'EN_FABRICACION': 0, 'PENDIENTE_K1': 2, 'APROBADO': 1, 'EN_MAQUINA': 0, 'REPETIR': 0,
+            'INACTIVO': 0,
         })
         self.assertEqual(res['total'], 3)
 
@@ -936,6 +937,14 @@ class InventarioGrabadosTests(BaseGrabados):
         respuesta = self.client.get(reverse('grabados:inventario_grabados'))
         for texto in ('Última modificación', 'Ubicación', 'Usos', 'Etiqueta'):
             self.assertContains(respuesta, texto)
+
+    def test_sin_aviso_de_limite_solo_el_contador(self):
+        respuesta = self.client.get(reverse('grabados:inventario_grabados'))
+        self.assertContains(respuesta, 'id="inv-contador"')
+        self.assertNotContains(respuesta, 'inv-aviso-limite')
+        js = (Path(__file__).parent / 'static' / 'js' / 'inventario_grabados.js').read_text(encoding='utf-8')
+        self.assertNotIn('inv-aviso-limite', js)
+        self.assertIn('Mostrando ${res.data.length} de ${res.total}', js)
 
 
 # ============================================================
@@ -1378,6 +1387,208 @@ class ConsultaLimiteYFiltrosTests(BaseGrabados):
         js = (Path(__file__).parent / 'static' / 'js' / 'grabados_tabla.js').read_text(encoding='utf-8')
         self.assertNotIn('setMonth(', js)
         self.assertIn('/grabados/api/consulta/registros/', js)
+
+
+class ConsultaGrabadosNuevosTests(BaseGrabados):
+    """Tabla de Consultas con lo nuevo: grabados sin LegadoOrden como filas "Nuevo"
+    junto a OrdenFabricacion ("Sistema anterior"), con búsqueda, filtros, tope y
+    tarjetas sobre los dos orígenes."""
+
+    def setUp(self):
+        self.client.force_login(self.operario)
+
+    def orden(self, of, registro, proceso='STAMPING', **campos):
+        datos = {'descripcion': 'ANILLA', 'cliente': 'CLIENTE SA', 'estado': 'COMPLETADO',
+                 'fecha_registro': registro}
+        datos.update(campos)
+        return OrdenFabricacion.objects.create(of=of, proceso=proceso, **datos)
+
+    def grabado(self, of, creado=None, tipo='DIRECTO', **cambios):
+        grabado = self.registrar(of=of, tipo=tipo)['grabado']
+        if creado:
+            cambios['creado_el'] = datetime(creado.year, creado.month, creado.day, 12, tzinfo=dt_timezone.utc)
+        if cambios:
+            Grabado.objects.filter(pk=grabado.pk).update(**cambios)
+        return Grabado.objects.get(pk=grabado.pk)
+
+    def migrado(self, of, registro, **campos):
+        """Fila vieja ya migrada: su grabado tiene LegadoOrden y no sale como "Nuevo"."""
+        grabado = self.grabado(of)
+        orden = self.orden(of, registro, **campos)
+        LegadoOrden.objects.create(orden=orden, rol='USO', grabado=grabado)
+        return orden, grabado
+
+    def consulta(self, q='', filtros=None):
+        params = {'q': q}
+        if filtros is not None:
+            params['filtros'] = json.dumps(filtros)
+        respuesta = self.client.get(reverse('grabados:api_consulta_registros'), params)
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        return respuesta.json()
+
+    def ids(self, respuesta):
+        return [r['id'] for r in respuesta['data']]
+
+    # ------------------------------------------------------------ filas
+    def test_grabado_nuevo_es_una_fila_y_el_migrado_no_se_duplica(self):
+        nuevo = self.grabado('30000', creado=date(2026, 10, 5), ubicacion='GBB-1-2')
+        orden, migrado = self.migrado('30001', date(2026, 10, 1))
+        res = self.consulta()
+        self.assertEqual(self.ids(res), [f'g{nuevo.id}', orden.id])
+        self.assertEqual(res['total'], 2)
+        self.assertNotIn(f'g{migrado.id}', self.ids(res))
+
+        fila = res['data'][0]
+        self.assertEqual(
+            {k: fila[k] for k in ('origen', 'of', 'cliente', 'desc', 'proceso', 'estado', 'tipo',
+                                  'ubicacion', 'sobre', 'fecha', 'fecha_reg', 'ref', 'maquina')},
+            {'origen': 'Nuevo', 'of': '30000', 'cliente': 'CLIENTE SA', 'desc': 'ANILLA DORADA',
+             'proceso': 'STAMPING', 'estado': 'APROBADO', 'tipo': 'DIRECTO', 'ubicacion': 'GBB-1-2',
+             'sobre': 'S-10', 'fecha': '—', 'fecha_reg': '05/10/2026', 'ref': None, 'maquina': None})
+        self.assertEqual((fila['grabado']['id'], fila['grabado']['ubicacion'], fila['motivo_sin_grabado']),
+                         (nuevo.id, 'GBB-1-2', None))
+        self.assertEqual(fila['grabado_mod'], selectors.formatear_fecha(nuevo.actualizado_el))
+        self.assertEqual(res['data'][1]['origen'], 'Sistema anterior')
+
+    def test_mezcla_por_fecha_de_registro_con_tope(self):
+        reciente = self.orden('100', date(2026, 10, 1))
+        vieja = self.orden('101', date(2026, 8, 1))
+        sin_fecha = self.orden('102', None)
+        medio = self.grabado('200', creado=date(2026, 9, 15))
+        mismo_dia = self.grabado('201', creado=date(2026, 10, 1))   # el mismo día: primero lo nuevo
+        res = self.consulta()
+        self.assertEqual(self.ids(res), [f'g{mismo_dia.id}', reciente.id, f'g{medio.id}', vieja.id, sin_fecha.id])
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 3):
+            res = self.consulta()
+        self.assertEqual(self.ids(res), [f'g{mismo_dia.id}', reciente.id, f'g{medio.id}'])
+        self.assertEqual((res['total'], res['limite']), (5, 3))
+
+    def test_tope_entre_los_dos_origenes_mira_todo_el_historial(self):
+        for i in range(3):
+            self.grabado(str(300 + i), creado=date(2026, 10, 1 + i))
+        viejo = self.grabado('399', creado=date(2020, 1, 1))
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 2):
+            self.assertNotIn(f'g{viejo.id}', self.ids(self.consulta()))
+            res = self.consulta(q='399')
+        self.assertEqual((self.ids(res), res['total']), ([f'g{viejo.id}'], 1))
+
+    # ------------------------------------------------------- búsqueda
+    def test_busqueda_en_filas_nuevas_y_por_of_del_envio(self):
+        grabado = self.grabado('22741', cliente='TABACALERA DEL CIBAO', ubicacion='GBB-4-4')
+        self.orden('40000', date(2026, 1, 1))
+        for q in ('22741', 'cibao', 'gbb-4', 'aprobado', 'tabacalera stamping'):
+            with self.subTest(q=q):
+                self.assertEqual(self.ids(self.consulta(q=q)), [f'g{grabado.id}'])
+        servicio.mandar_a_maquina(of='30500', proceso='STAMPING', grabado_id=grabado.id,
+                                  fila=fila_excel(), usuario=self.operario)
+        # La OF del PLANI no es fila propia: buscarla encuentra el grabado con que se tiró.
+        res = self.consulta(q='30500')
+        self.assertEqual((self.ids(res), res['total']), ([f'g{grabado.id}'], 1))
+        self.assertEqual(self.consulta(q='nada')['total'], 0)
+
+    # -------------------------------------------------------- filtros
+    def test_filtro_por_origen(self):
+        nuevo = self.grabado('30000')
+        orden = self.orden('40000', date(2026, 1, 1))
+        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'in': ['Nuevo']}])), [f'g{nuevo.id}'])
+        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'fuera': ['Nuevo']}])), [orden.id])
+        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'in': ['Sistema anterior']}])),
+                         [orden.id])
+        self.assertEqual(self.consulta(filtros=[{'col': 'origen', 'in': []}])['total'], 0)
+
+    def test_filtros_por_columna_en_filas_nuevas(self):
+        nuevo = self.grabado('30000', cliente='NUEVO SA')
+        orden = self.orden('40000', date(2026, 1, 1), cliente='VIEJO SA', maquina='GIETZ 01')
+        casos = [
+            ([{'col': 'cliente', 'in': ['NUEVO SA']}], [f'g{nuevo.id}']),
+            ([{'col': 'cliente', 'fuera': ['NUEVO SA']}], [orden.id]),
+            ([{'col': 'estado', 'in': ['APROBADO']}], [f'g{nuevo.id}']),
+            ([{'col': 'tipo', 'in': ['DIRECTO']}], [f'g{nuevo.id}']),
+            # Columnas que el grabado no tiene: vacías ('—').
+            ([{'col': 'maquina', 'in': ['—']}], [f'g{nuevo.id}']),
+            ([{'col': 'maquina', 'in': ['GIETZ 01']}], [orden.id]),
+            ([{'col': 'maquina', 'fuera': ['—']}], [orden.id]),
+            ([{'col': 'temp', 'in': ['150']}], []),
+        ]
+        for filtros, esperado in casos:
+            with self.subTest(filtros=filtros):
+                self.assertEqual(self.ids(self.consulta(filtros=filtros)), esperado)
+
+    def test_boton_fecha_y_fecha_de_registro(self):
+        nuevo = self.grabado('30000', creado=date(2026, 9, 10))
+        orden = self.orden('40000', date(2026, 9, 1), fecha_programada=date(2026, 9, 5))
+        # Fecha Prog.: el grabado no tiene, así que no pasa (como una fila vieja sin fecha).
+        res = self.consulta(filtros=[{'col': 'fecha', 'desde': '2026-09-01', 'hasta': '2026-09-30'}])
+        self.assertEqual(self.ids(res), [orden.id])
+        res = self.consulta(filtros=[{'col': 'fecha_reg', 'desde': '2026-09-05', 'hasta': '2026-09-30'}])
+        self.assertEqual(self.ids(res), [f'g{nuevo.id}'])
+        res = self.consulta(filtros=[{'col': 'fecha_reg', 'desde': None, 'hasta': '2026-09-09'}])
+        self.assertEqual(self.ids(res), [orden.id])
+
+    def test_valores_de_columna_juntan_los_dos_origenes(self):
+        self.grabado('30000', cliente='NUEVO SA')
+        self.orden('40000', date(2026, 1, 1), cliente='VIEJO SA', maquina='GIETZ 01')
+        url = reverse('grabados:api_consulta_valores')
+        valores = lambda **p: self.client.get(url, p).json()['valores']
+        self.assertEqual(sorted(valores(col='cliente')), ['NUEVO SA', 'VIEJO SA'])
+        self.assertEqual(sorted(valores(col='origen')), ['Nuevo', 'Sistema anterior'])
+        self.assertIn(None, valores(col='maquina'))            # la fila nueva no tiene máquina
+        self.assertEqual(valores(col='origen', q='30000'), ['Nuevo'])
+        self.assertIn('APROBADO', valores(col='estado'))
+
+    # -------------------------------------------- panel y ubicación
+    def test_ubicacion_de_fila_nueva_se_edita_con_cambiar_ubicacion(self):
+        nuevo = self.grabado('30000', ubicacion='GBB-1-1')
+        url = reverse('grabados:api_grabado_ubicacion', kwargs={'grabado_id': nuevo.id})
+        respuesta = self.client.post(url, data=json.dumps({'ubicacion': 'gbb-2-3', 'origen': 'CONSULTA'}),
+                                     content_type='application/json')
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        cambio = HistorialUbicacion.objects.get(grabado=nuevo)
+        self.assertEqual((cambio.ubicacion_anterior, cambio.ubicacion_nueva, cambio.origen),
+                         ('GBB-1-1', 'GBB-2-3', 'CONSULTA'))
+        fila = self.consulta()['data'][0]
+        self.assertEqual((fila['ubicacion'], fila['grabado']['ubicacion']), ('GBB-2-3', 'GBB-2-3'))
+
+    def test_pantalla_con_columna_origen_y_panel_para_filas_nuevas(self):
+        html = self.client.get(reverse('grabados:grabado_consulta')).content.decode()
+        self.assertIn('data-col="origen"', html)
+        self.assertIn('data-columna="origen"', html)
+        js = (Path(__file__).parent / 'static' / 'js' / 'grabados_tabla.js').read_text(encoding='utf-8')
+        self.assertIn("'origen'", js)
+        self.assertIn('window.PanelGrabado.abrir(reg.grabado.id);', js)
+
+    # ------------------------------------------------------- tarjetas
+    def test_tarjetas_suman_lo_nuevo_sin_contar_dos_veces(self):
+        viejo = date(2018, 1, 1)
+        # En máquina: fila vieja sin migrar + envío abierto. La fila vieja migrada con grabado
+        # no cuenta (la representa su grabado/envío).
+        self.orden('70000', viejo, estado='EN_MAQUINA')
+        self.migrado('70001', viejo, estado='EN_MAQUINA')
+        en_maquina = self.grabado('70002')
+        servicio.mandar_a_maquina(of='71000', proceso='STAMPING', grabado_id=en_maquina.id,
+                                  fila=fila_excel(), usuario=self.operario)
+        # Terminados hoy: envío recogido hoy (OK).
+        recogido = self.grabado('70003')
+        envio = servicio.mandar_a_maquina(of='71001', proceso='STAMPING', grabado_id=recogido.id,
+                                          fila=fila_excel(), usuario=self.operario)
+        servicio.recoger_de_maquina(envio_id=envio.id, of='71001', estado_fisico='OK', ubicacion='GBB-1-1',
+                                    comentario='', usuario=self.operario)
+        # Para repetir: fila vieja REPETIR sin migrar + todos los grabados en REPETIR; la fila
+        # vieja migrada cuenta una sola vez, por su grabado.
+        self.orden('70004', viejo, estado='REPETIR')
+        _, repetir_migrado = self.migrado('70005', viejo, estado='REPETIR')
+        Grabado.objects.filter(pk=repetir_migrado.pk).update(estado='REPETIR')
+        self.grabado('70006', estado='REPETIR')
+        # Pendientes: fila vieja PENDIENTE (SIN_MIGRAR) + grabados en fabricación o K1.
+        pendiente = self.orden('70007', viejo, estado='PENDIENTE')
+        LegadoOrden.objects.create(orden=pendiente, rol='SIN_MIGRAR', grabado=None)
+        self.registrar(of='70008', tipo='K1')                        # PENDIENTE_K1
+        self.grabado('70009', estado='EN_FABRICACION')
+
+        kpis = self.client.get(reverse('grabados:api_kpis')).json()
+        self.assertEqual((kpis['en_maquina'], kpis['para_repetir'], kpis['pendientes']), (2, 3, 3))
+        # Hoy: el envío recogido + las 2 filas viejas REPETIR (actualizado_el = hoy al crearlas).
+        self.assertEqual(kpis['completados_hoy'], 3)
 
 
 # ============================================================
@@ -1890,9 +2101,11 @@ class FabricacionRetiradaTests(BaseGrabados):
         self.assertFalse(OrdenFabricacion.objects.exists())
 
     def test_pantallas_legadas_marcadas_como_historico(self):
-        for nombre in ('grabado_consulta', 'grabado_estadisticas'):
-            with self.subTest(pantalla=nombre):
-                self.assertContains(self.client.get(reverse(f'grabados:{nombre}')), '(Histórico)')
+        self.assertContains(self.client.get(reverse('grabados:grabado_estadisticas')), '(Histórico)')
+        # La Tabla de Consultas ya junta el histórico con los grabados nuevos.
+        respuesta = self.client.get(reverse('grabados:grabado_consulta'))
+        self.assertNotContains(respuesta, '(Histórico)')
+        self.assertContains(respuesta, 'Registro de Órdenes y Grabados')
 
     def test_alta_acepta_of_y_proceso_en_la_url(self):
         respuesta = self.client.get(reverse('grabados:alta_grabado') + '?of=22741&proceso=STAMPING')
@@ -2101,7 +2314,8 @@ class MigrarAGrabadosTests(TestCase):
 
     def test_grabado_reutilizado_conserva_su_ubicacion(self):
         existente = Grabado.objects.create(of_origen='22741', proceso='STAMPING', cliente='ALTA',
-                                           referencia='ALTA', estado='APROBADO', ubicacion='GBB-9-9')
+                                           referencia='ALTA', estado='APROBADO', ubicacion='GBB-9-9',
+                                           tipo='K1')
         self.orden('22741', ubicacion='CAJON A1')
         self.migrar('--aplicar')
         existente.refresh_from_db()
@@ -2121,7 +2335,7 @@ class MigrarAGrabadosTests(TestCase):
 
     def test_reporte_separa_grabados_nuevos_de_los_que_ya_estaban_y_cuenta_envios(self):
         Grabado.objects.create(of_origen='30000', proceso='STAMPING', cliente='ALTA',
-                               referencia='ALTA', estado='PENDIENTE_K1')
+                               referencia='ALTA', estado='PENDIENTE_K1', tipo='K1')
         self.orden('22741')
         self.orden('22742', estado='EN_MAQUINA')
         self.orden('22743', estado='EN_PROCESO')
@@ -2147,7 +2361,8 @@ class MigrarAGrabadosTests(TestCase):
 
     def test_reutiliza_grabado_de_alta_y_reporta_conflicto(self):
         existente = Grabado.objects.create(of_origen='22741', proceso='STAMPING', cliente='ALTA',
-                                           referencia='ALTA', estado='PENDIENTE_K1', usos_acumulados=2)
+                                           referencia='ALTA', estado='PENDIENTE_K1', usos_acumulados=2,
+                                           tipo='K1')
         self.orden('22741', usos_acumulados=5)
         salida = self.migrar('--aplicar')
 
@@ -2180,3 +2395,308 @@ class MigrarAGrabadosTests(TestCase):
         antes = OrdenFabricacion.objects.values().get(pk=orden.pk)
         self.migrar('--aplicar')
         self.assertEqual(OrdenFabricacion.objects.values().get(pk=orden.pk), antes)
+
+
+# ============================================================
+# GRABADO INACTIVO: desactivar / reactivar y protección del historial
+# ============================================================
+
+class DesactivarGrabadoTests(BasePlani):
+
+    def desactivar(self, grabado, motivo='Grabado dañado', usuario=None):
+        return servicio.desactivar_grabado(grabado_id=grabado.id, motivo=motivo,
+                                           usuario=usuario or self.operario)
+
+    def reactivar(self, grabado, usuario=None):
+        return servicio.reactivar_grabado(grabado_id=grabado.id, usuario=usuario or self.supervisor)
+
+    # ---------------------------------------------------------- servicio
+    def test_desactivar_guarda_quien_cuando_motivo_y_estado_previo(self):
+        grabado = self.aprobado()
+        self.desactivar(grabado, motivo='  Grabado dañado  ')
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'INACTIVO')
+        self.assertEqual(grabado.get_estado_display(), 'Inactivo')
+        self.assertEqual(grabado.estado_previo, 'APROBADO')
+        self.assertEqual(grabado.desactivado_por, self.operario)
+        self.assertIsNotNone(grabado.desactivado_el)
+        self.assertEqual(grabado.motivo_desactivacion, 'Grabado dañado')
+        cambio = HistorialActivacion.objects.get(grabado=grabado)
+        self.assertEqual((cambio.accion, cambio.estado, cambio.motivo, cambio.usuario),
+                         ('DESACTIVAR', 'APROBADO', 'Grabado dañado', self.operario))
+        self.assertIsNotNone(cambio.fecha)
+
+    def test_motivo_obligatorio(self):
+        grabado = self.aprobado()
+        for motivo in ('', '   ', 'abc', None):
+            with self.subTest(motivo=motivo):
+                with self.assertRaisesMessage(servicio.ErrorGrabado, 'motivo de la desactivación es obligatorio'):
+                    self.desactivar(grabado, motivo=motivo)
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'APROBADO')
+        self.assertFalse(HistorialActivacion.objects.exists())
+
+    def test_en_maquina_no_se_puede_desactivar(self):
+        grabado = self.aprobado()
+        self.mandar(grabado)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'está en máquina: recógelo'):
+            self.desactivar(grabado)
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'EN_MAQUINA')
+        self.assertFalse(HistorialActivacion.objects.exists())
+
+    def test_ya_inactivo_no_se_vuelve_a_desactivar(self):
+        grabado = self.aprobado()
+        self.desactivar(grabado)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'ya está inactivo'):
+            self.desactivar(grabado)
+        self.assertEqual(HistorialActivacion.objects.count(), 1)
+
+    def test_grabado_inexistente(self):
+        with self.assertRaises(servicio.GrabadoNoExiste):
+            servicio.desactivar_grabado(grabado_id=999999, motivo='Grabado dañado', usuario=self.operario)
+        with self.assertRaises(servicio.GrabadoNoExiste):
+            servicio.reactivar_grabado(grabado_id=999999, usuario=self.operario)
+
+    def test_reactivar_vuelve_al_estado_previo_y_deja_rastro(self):
+        for estado in ('APROBADO', 'REPETIR', 'EN_FABRICACION'):
+            with self.subTest(estado=estado):
+                grabado = self.aprobado(of=f'4{len(estado)}000')
+                Grabado.objects.filter(pk=grabado.pk).update(estado=estado)
+                self.desactivar(grabado)
+                self.reactivar(grabado)
+                grabado.refresh_from_db()
+                self.assertEqual(grabado.estado, estado)
+                self.assertEqual((grabado.estado_previo, grabado.motivo_desactivacion), ('', ''))
+                self.assertIsNone(grabado.desactivado_por)
+                self.assertIsNone(grabado.desactivado_el)
+                ultimo = HistorialActivacion.objects.filter(grabado=grabado).first()
+                self.assertEqual((ultimo.accion, ultimo.estado, ultimo.usuario),
+                                 ('REACTIVAR', estado, self.supervisor))
+                self.assertEqual(HistorialActivacion.objects.filter(grabado=grabado).count(), 2)
+
+    def test_reactivar_un_grabado_activo_da_error(self):
+        grabado = self.aprobado()
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'no está inactivo'):
+            self.reactivar(grabado)
+        self.assertFalse(HistorialActivacion.objects.exists())
+
+    # ---------------------------------------------------------- bloqueos
+    def test_inactivo_no_se_manda_a_maquina(self):
+        grabado = self.aprobado()
+        self.desactivar(grabado)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'está inactivo: no se puede mandar a máquina'):
+            self.mandar(grabado)
+        self.assertFalse(EnvioMaquina.objects.exists())
+        (estado,) = self.resolver(fila_plani('22741'))
+        self.assertEqual(estado['accion'], selectors.PLANI_INACTIVO)
+        self.assertEqual(estado['grabado']['estado'], 'INACTIVO')
+
+    def test_inactivo_no_cambia_de_ubicacion(self):
+        grabado = self.aprobado()
+        self.desactivar(grabado)
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'no se puede cambiar su ubicación'):
+            servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='GBB-1-1', usuario=self.operario)
+        self.client.force_login(self.operario)
+        respuesta = self.client.post(reverse('grabados:api_grabado_ubicacion', args=[grabado.id]),
+                                     data=json.dumps({'ubicacion': 'GBB-1-1'}), content_type='application/json')
+        self.assertEqual(respuesta.status_code, 409)
+        self.assertFalse(HistorialUbicacion.objects.exists())
+
+    def test_crear_grabado_bloquea_un_inactivo(self):
+        grabado = self.aprobado()
+        Grabado.objects.filter(pk=grabado.pk).update(estado='REPETIR')
+        self.desactivar(grabado)
+        evaluacion = servicio.evaluar_alta('22741', 'STAMPING', info_externa(), _normalizar_of)
+        self.assertEqual(evaluacion['accion'], servicio.ACCION_BLOQUEADA)
+        self.assertIn('inactivo', evaluacion['mensaje'])
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'inactivo'):
+            self.registrar()
+
+    def test_k1_pendiente_queda_oculto_y_reaparece_al_reactivar(self):
+        resultado = self.registrar()
+        grabado, prueba = resultado['grabado'], resultado['prueba_k1']
+        self.client.force_login(self.operario)
+        url = reverse('grabados:api_k1_pendientes')
+
+        self.desactivar(grabado)
+        self.assertEqual(self.client.get(url).json()['data'], [])
+        with self.assertRaisesMessage(servicio.TransicionInvalida, 'inactivo'):
+            servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor, aprobar=True)
+        prueba.refresh_from_db()
+        self.assertEqual(prueba.resultado, 'PENDIENTE')
+
+        self.reactivar(grabado)
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'PENDIENTE_K1')
+        self.assertEqual([p['id'] for p in self.client.get(url).json()['data']], [prueba.id])
+        servicio.decidir_k1(prueba_id=prueba.id, usuario=self.supervisor, aprobar=True)
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'APROBADO')
+
+    # ---------------------------------------------------------- consulta
+    def test_detalle_de_un_inactivo_trae_todo_su_historial(self):
+        grabado = self.aprobado()
+        envio = self.mandar(grabado)
+        self.recoger(envio)
+        self.desactivar(grabado)
+        d = selectors.detalle_grabado(grabado.id)
+        self.assertTrue(d['inactivo'])
+        self.assertFalse(d['puede_desactivar'])
+        self.assertEqual(d['estado'], 'INACTIVO')
+        self.assertEqual(d['desactivacion']['por'], 'operario')
+        self.assertEqual(d['desactivacion']['motivo'], 'Grabado dañado')
+        self.assertEqual(d['desactivacion']['estado_previo'], 'APROBADO')
+        self.assertIsNotNone(d['desactivacion']['el'])
+        self.assertEqual(len(d['fabricaciones']), 1)
+        self.assertEqual(len(d['pruebas_k1']), 1)
+        self.assertEqual(len(d['envios']), 1)
+        self.assertEqual(len(d['historial_ubicaciones']), 1)
+        self.assertEqual([(c['accion'], c['usuario']) for c in d['historial_activaciones']],
+                         [('DESACTIVAR', 'operario')])
+
+        self.reactivar(grabado)
+        d = selectors.detalle_grabado(grabado.id)
+        self.assertFalse(d['inactivo'])
+        self.assertTrue(d['puede_desactivar'])
+        self.assertIsNone(d['desactivacion'])
+        self.assertEqual([c['accion'] for c in d['historial_activaciones']], ['REACTIVAR', 'DESACTIVAR'])
+
+    def test_detalle_en_maquina_no_puede_desactivar(self):
+        grabado = self.aprobado()
+        self.mandar(grabado)
+        self.assertFalse(selectors.detalle_grabado(grabado.id)['puede_desactivar'])
+
+    def test_inventario_tarjeta_y_filtro_inactivos(self):
+        activo = self.aprobado()
+        inactivo = self.aprobado(of='22800')
+        self.desactivar(inactivo)
+        self.client.force_login(self.operario)
+        self.assertContains(self.client.get(reverse('grabados:inventario_grabados')), 'data-estado="INACTIVO"')
+        res = self.client.get(reverse('grabados:api_inventario')).json()
+        self.assertEqual((res['conteos']['INACTIVO'], res['conteos']['APROBADO']), (1, 1))
+        res = self.client.get(reverse('grabados:api_inventario'), {'estado': 'INACTIVO'}).json()
+        self.assertEqual([g['id'] for g in res['data']], [inactivo.id])
+        self.assertEqual(res['data'][0]['estado_display'], 'Inactivo')
+        self.assertNotEqual(activo.id, inactivo.id)
+
+    def test_tabla_de_consultas_muestra_y_filtra_inactivos(self):
+        activo = self.aprobado()
+        inactivo = self.aprobado(of='22800')
+        self.desactivar(inactivo)
+        self.client.force_login(self.operario)
+        self.assertContains(self.client.get(reverse('grabados:grabado_consulta')), '<option value="INACTIVO">')
+
+        filas = {r['id']: r for r in self.client.get(reverse('grabados:api_consulta_registros')).json()['data']}
+        self.assertEqual(filas[f'g{inactivo.id}']['estado'], 'INACTIVO')
+        self.assertEqual(filas[f'g{inactivo.id}']['grabado']['estado'], 'INACTIVO')
+        self.assertEqual(filas[f'g{activo.id}']['grabado']['estado'], 'APROBADO')
+
+        res = self.client.get(reverse('grabados:api_consulta_registros'),
+                              {'filtros': json.dumps([{'col': 'estado', 'in': ['INACTIVO']}])}).json()
+        self.assertEqual([r['id'] for r in res['data']], [f'g{inactivo.id}'])
+        valores = self.client.get(reverse('grabados:api_consulta_valores'), {'col': 'estado'}).json()
+        self.assertIn('INACTIVO', json.dumps(valores))
+
+    def test_fila_vieja_enlazada_trae_el_estado_del_grabado(self):
+        grabado = self.aprobado()
+        orden = OrdenFabricacion.objects.create(of='22741', proceso='STAMPING', cliente='C', estado='COMPLETADO')
+        LegadoOrden.objects.create(orden=orden, rol='USO', grabado=grabado)
+        self.desactivar(grabado)
+        enlaces = selectors.grabados_de_ordenes([{'id': orden.id, 'of': '22741', 'referencia': None,
+                                                  'proceso': 'STAMPING', 'legado_grabado': grabado.id,
+                                                  'legado_rol': 'USO'}])
+        self.assertEqual(enlaces[orden.id]['grabado']['estado'], 'INACTIVO')
+
+    # --------------------------------------------------------------- API
+    def post(self, nombre, grabado_id, datos=None, usuario=None):
+        self.client.force_login(usuario or self.operario)
+        return self.client.post(reverse(f'grabados:{nombre}', args=[grabado_id]),
+                                data=json.dumps(datos or {}), content_type='application/json')
+
+    def test_api_desactivar_y_reactivar(self):
+        grabado = self.aprobado()
+        respuesta = self.post('api_grabado_desactivar', grabado.id, {'motivo': 'Cliente ya no lo usa'})
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertEqual(respuesta.json()['estado'], 'INACTIVO')
+        grabado.refresh_from_db()
+        self.assertEqual((grabado.estado, grabado.desactivado_por), ('INACTIVO', self.operario))
+
+        respuesta = self.post('api_grabado_reactivar', grabado.id, usuario=self.supervisor)
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertEqual(respuesta.json()['estado'], 'APROBADO')
+        self.assertIn('vuelve a "Aprobado"', respuesta.json()['message'])
+        self.assertEqual(HistorialActivacion.objects.first().usuario, self.supervisor)
+
+    def test_api_errores(self):
+        grabado = self.aprobado()
+        self.assertEqual(self.post('api_grabado_desactivar', grabado.id, {'motivo': ''}).status_code, 400)
+        self.assertEqual(self.post('api_grabado_reactivar', grabado.id).status_code, 409)
+        self.assertEqual(self.post('api_grabado_desactivar', 999999, {'motivo': 'Grabado dañado'}).status_code, 404)
+        self.mandar(grabado)
+        respuesta = self.post('api_grabado_desactivar', grabado.id, {'motivo': 'Grabado dañado'})
+        self.assertEqual(respuesta.status_code, 409)
+        self.assertIn('recógelo', respuesta.json()['message'])
+        self.assertEqual(self.client.get(reverse('grabados:api_grabado_desactivar', args=[grabado.id])).status_code, 405)
+
+    def test_api_exige_el_permiso_del_modulo(self):
+        grabado = self.aprobado()
+        respuesta = self.post('api_grabado_desactivar', grabado.id, {'motivo': 'Grabado dañado'},
+                              usuario=self.sin_acceso)
+        self.assertEqual(respuesta.status_code, 403)
+        grabado.refresh_from_db()
+        self.assertEqual(grabado.estado, 'APROBADO')
+
+
+class GrabadoNoSeEliminaTests(BaseGrabados):
+
+    def test_admin_no_permite_eliminar_grabados(self):
+        grabado = self.registrar()['grabado']
+        modelo_admin = admin.site._registry[Grabado]
+        peticion = RequestFactory().get('/')
+        peticion.user = self.admin
+        self.assertFalse(modelo_admin.has_delete_permission(peticion))
+        self.assertFalse(modelo_admin.has_delete_permission(peticion, grabado))
+        self.assertNotIn('delete_selected', modelo_admin.get_actions(peticion))
+        for campo in ('desactivado_por', 'desactivado_el', 'motivo_desactivacion', 'estado_previo'):
+            self.assertIn(campo, modelo_admin.get_readonly_fields(peticion, grabado))
+        self.client.force_login(self.admin)
+        url = reverse('admin:gestion_grabados_grabado_delete', args=[grabado.id])
+        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 403)
+        self.assertTrue(Grabado.objects.filter(pk=grabado.pk).exists())
+
+    def test_historial_de_activacion_es_de_solo_lectura_en_el_admin(self):
+        modelo_admin = admin.site._registry[HistorialActivacion]
+        peticion = mock.Mock(user=self.admin)
+        self.assertFalse(modelo_admin.has_add_permission(peticion))
+        self.assertFalse(modelo_admin.has_change_permission(peticion))
+        self.assertFalse(modelo_admin.has_delete_permission(peticion))
+
+    def test_historial_de_ubicacion_protege_al_grabado(self):
+        from django.db.models import ProtectedError
+        self.assertEqual(HistorialUbicacion._meta.get_field('grabado').remote_field.on_delete.__name__, 'PROTECT')
+        grabado = self.registrar(tipo='DIRECTO')['grabado']
+        # Sin fabricación ni K1 que también lo protejan: solo queda el historial de ubicación.
+        grabado.fabricaciones.all().delete()
+        servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='GBB-1-1', usuario=self.operario)
+        with self.assertRaises(ProtectedError):
+            Grabado.objects.filter(pk=grabado.pk).delete()
+        self.assertEqual(HistorialUbicacion.objects.filter(grabado=grabado).count(), 1)
+
+    def test_tipo_es_obligatorio(self):
+        from django.db import IntegrityError, transaction
+        from django.db.models.fields import NOT_PROVIDED
+        self.assertIs(Grabado._meta.get_field('tipo').default, NOT_PROVIDED)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Grabado.objects.create(of_origen='50000', proceso='STAMPING', cliente='C')
+        for tipo in ('K1', 'DIRECTO', 'LEGADO'):
+            Grabado.objects.create(of_origen=f'5{len(tipo)}001', proceso='STAMPING', cliente='C', tipo=tipo)
+
+    def test_los_servicios_pasan_el_tipo(self):
+        self.assertEqual(self.registrar(of='51000', tipo='K1')['grabado'].tipo, 'K1')
+        self.assertEqual(self.registrar(of='51001', tipo='DIRECTO')['grabado'].tipo, 'DIRECTO')
+        with self.assertRaisesMessage(servicio.ErrorGrabado, 'Selecciona el tipo'):
+            self.registrar(of='51002', tipo=None)
+        # migrar_a_grabados crea sus grabados con tipo='LEGADO' (cubierto en MigrarAGrabadosTests).
+        fuente = Path(__file__).with_name('management') / 'commands' / 'migrar_a_grabados.py'
+        self.assertIn("tipo='LEGADO'", fuente.read_text(encoding='utf-8'))

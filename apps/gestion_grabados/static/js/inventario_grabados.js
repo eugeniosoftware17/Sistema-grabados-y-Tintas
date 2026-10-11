@@ -64,14 +64,6 @@
 
     function renderizarTabla(res) {
         $('inv-contador').textContent = `Mostrando ${res.data.length} de ${res.total}`;
-        const aviso = $('inv-aviso-limite');
-        if (res.total > res.data.length) {
-            aviso.textContent = `Se muestran los ${res.data.length} grabados modificados más recientemente de ${res.total}. ` +
-                'Afina la búsqueda o filtra por estado, proceso o tipo para ver el resto.';
-            aviso.style.display = 'block';
-        } else {
-            aviso.style.display = 'none';
-        }
 
         if (!grabados.length) {
             mensajeTabla(filtros.q || filtros.proceso || filtros.tipo || filtros.estado
@@ -91,8 +83,11 @@
                 <td data-label="Intentos K1" class="inv-centrado">${escapar(g.intentos_k1)}</td>
                 <td data-label="Último K1">${etiqueta(g.ultimo_k1, g.ultimo_k1_display)}</td>
                 <td data-label="Usos" class="inv-centrado">${escapar(g.usos_acumulados)}</td>
-                <td data-label="Ubicación" class="inv-ubicacion" tabindex="0"
-                    title="Doble clic para editar la ubicación">${escapar(g.ubicacion)}</td>
+                ${g.estado === 'INACTIVO'
+                    ? `<td data-label="Ubicación" class="inv-ubicacion-bloqueada"
+                           title="Grabado inactivo: reactívalo para cambiar la ubicación">${escapar(g.ubicacion)}</td>`
+                    : `<td data-label="Ubicación" class="inv-ubicacion" tabindex="0"
+                           title="Doble clic para editar la ubicación">${escapar(g.ubicacion)}</td>`}
                 <td data-label="Última modificación" class="inv-modificado">${escapar(g.actualizado_el)}</td>
                 <td data-label="Fecha de creación">${escapar(g.creado_el)}</td>
                 <td data-label="Acciones" class="inv-centrado">
@@ -226,6 +221,9 @@
             editarUbicacion(e.target);   // con teclado: Enter sobre la celda
         }
     });
+
+    // Desactivar / reactivar desde el panel cambia estado y tarjetas.
+    document.addEventListener('panelgrabado:cambio', cargar);
 
     cargar();
 })();

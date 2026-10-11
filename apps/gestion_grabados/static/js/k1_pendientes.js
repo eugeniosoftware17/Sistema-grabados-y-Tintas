@@ -166,5 +166,8 @@
         if (p) { e.preventDefault(); verDetalle(p); }
     });
 
+    // Un grabado desactivado sale de la lista (y vuelve al reactivarlo).
+    document.addEventListener('panelgrabado:cambio', cargar);
+
     cargar();
 })();

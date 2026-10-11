@@ -12,7 +12,7 @@
        Las etiquetas de estado reutilizan .pg-etiqueta del panel de detalle. */
     .inv-tarjetas {
         display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        grid-template-columns: repeat(6, minmax(0, 1fr));
         gap: 12px;
         padding: 14px 20px;
         border-bottom: 1px solid var(--color-borde);
@@ -40,13 +40,12 @@
     .inv-tarjeta--APROBADO       { border-top-color: #2d8a3e; }
     .inv-tarjeta--EN_MAQUINA     { border-top-color: #e67e22; }
     .inv-tarjeta--REPETIR        { border-top-color: #d32f2f; }
+    .inv-tarjeta--INACTIVO       { border-top-color: #6c757d; }
 
     .inv-filtro-activo { font-size: 12px; color: #2d8a3e; display: none; align-items: center; gap: 6px; }
     .inv-filtro-activo button { border: none; background: #e8f5e9; color: #1b5e20; border-radius: 999px;
                                 padding: 3px 10px; cursor: pointer; font-size: 12px; font-weight: 600; }
     .inv-select { padding: 8px 10px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; background: #fff; }
-    .inv-aviso-limite { padding: 8px 20px; font-size: 12px; color: #8a6100; background: #fff8e1;
-                        border-bottom: 1px solid #ffe082; display: none; }
 
     .inv-fila { cursor: pointer; }
     .inv-fila:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
@@ -57,6 +56,7 @@
     .inv-ubicacion { cursor: text; white-space: nowrap; }
     .inv-ubicacion:hover { background: #f0f9f4; }
     .inv-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
+    .inv-ubicacion-bloqueada { white-space: nowrap; color: #6c757d; cursor: not-allowed; }
     .inv-ubicacion__input { width: 110px; padding: 4px 6px; border: 1px solid #2d8a3e; border-radius: 6px;
                             font-size: 13px; font-family: inherit; text-transform: uppercase; }
     .inv-ubicacion__error { color: #d32f2f; font-size: 11px; margin-top: 3px; white-space: normal; max-width: 220px; }
@@ -139,8 +139,6 @@
         Estado: <button type="button" id="inv-quitar-estado" aria-label="Quitar filtro de estado"></button>
       </div>
     </div>
-
-    <div class="inv-aviso-limite" id="inv-aviso-limite"></div>
 
     <div class="tabla-area-datos">
       <table class="tabla-registros">

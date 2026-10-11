@@ -145,7 +145,9 @@ def k1_pendientes(request):
 
 @login_required
 def api_k1_pendientes(request):
+    # El K1 de un grabado inactivo queda oculto hasta que se reactive.
     pruebas = (PruebaK1.objects.filter(resultado='PENDIENTE')
+               .exclude(grabado__estado=servicio.ESTADO_INACTIVO)
                .select_related('grabado', 'maquina', 'fabricacion', 'fabricacion__registrado_por')
                .order_by('creado_el'))
     # Solo lo que muestra la tabla; el reporte completo sale de api_grabado_detalle.
@@ -274,6 +276,38 @@ def api_grabado_ubicacion(request, grabado_id):
         'ubicacion': grabado.ubicacion,
         'actualizado_el': selectors.formatear_fecha(grabado.actualizado_el),
     })
+
+
+def _cambiar_activacion(request, grabado_id, desactivar):
+    if request.method != 'POST':
+        return _error('Método no permitido', status=405)
+    data = _leer_json(request)
+    if data is None:
+        return _error('Datos inválidos.')
+    try:
+        if desactivar:
+            grabado = servicio.desactivar_grabado(grabado_id=grabado_id, motivo=data.get('motivo'),
+                                                  usuario=request.user)
+            mensaje = f'Grabado {grabado.of_origen} {grabado.proceso} desactivado.'
+        else:
+            grabado = servicio.reactivar_grabado(grabado_id=grabado_id, usuario=request.user)
+            mensaje = (f'Grabado {grabado.of_origen} {grabado.proceso} reactivado: '
+                       f'vuelve a "{grabado.get_estado_display()}".')
+    except servicio.ErrorGrabado as e:
+        return _error(e.mensaje, status=e.status)
+    return JsonResponse({'status': 'ok', 'message': mensaje, 'estado': grabado.estado})
+
+
+@login_required
+def api_grabado_desactivar(request, grabado_id):
+    """Desactiva un grabado (nunca se elimina). JSON: {motivo}."""
+    return _cambiar_activacion(request, grabado_id, desactivar=True)
+
+
+@login_required
+def api_grabado_reactivar(request, grabado_id):
+    """Reactiva un grabado inactivo: vuelve a su estado previo."""
+    return _cambiar_activacion(request, grabado_id, desactivar=False)
 
 
 # ============================================================

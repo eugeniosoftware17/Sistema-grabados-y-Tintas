@@ -297,6 +297,8 @@ class Grabado(models.Model):
         ('APROBADO', 'Aprobado'),
         ('EN_MAQUINA', 'En Máquina'),
         ('REPETIR', 'Para Repetir'),
+        # Un grabado nunca se elimina: se desactiva (services.desactivar_grabado).
+        ('INACTIVO', 'Inactivo'),
     ]
     TIPO_CHOICES = [
         ('K1', 'K1 – de prueba'),
@@ -335,13 +337,25 @@ class Grabado(models.Model):
     tipo = models.CharField(
         max_length=10,
         choices=TIPO_CHOICES,
-        default='K1',
+        # Sin default: quien crea el grabado tiene que decir el tipo (lo exige
+        # además la restricción grabado_tipo_valido).
         verbose_name="Tipo",
         help_text="Cómo se creó: K1 (prueba, requiere aprobación), Producción directa "
                   "(aprobado al guardar, sin K1) o Legado (migrado desde OrdenFabricacion)."
     )
     ubicacion = models.CharField(max_length=200, blank=True, null=True, verbose_name="Ubicación física")
     usos_acumulados = models.PositiveIntegerField(default=0, verbose_name="Usos acumulados")
+
+    # Última desactivación (se limpian al reactivar; el rastro completo queda en
+    # HistorialActivacion). estado_previo es el estado al que vuelve al reactivar.
+    desactivado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Desactivado por"
+    )
+    desactivado_el = models.DateTimeField(null=True, blank=True, verbose_name="Desactivado el")
+    motivo_desactivacion = models.TextField(blank=True, default='', verbose_name="Motivo de desactivación")
+    estado_previo = models.CharField(max_length=20, blank=True, default='', choices=ESTADO_CHOICES,
+                                     verbose_name="Estado previo a la desactivación")
 
     creado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
@@ -356,6 +370,8 @@ class Grabado(models.Model):
         ordering = ['-actualizado_el']
         constraints = [
             models.UniqueConstraint(fields=['of_origen', 'proceso'], name='grabado_unico_of_proceso'),
+            models.CheckConstraint(condition=models.Q(tipo__in=['K1', 'DIRECTO', 'LEGADO']),
+                                   name='grabado_tipo_valido'),
         ]
         indexes = [
             models.Index(fields=['estado'], name='grabado_estado_idx'),
@@ -532,7 +548,7 @@ class HistorialUbicacion(models.Model):
         ('RECOGIDA', 'Recogida desde el PLANI'),
     ]
 
-    grabado = models.ForeignKey(Grabado, on_delete=models.CASCADE, related_name='historial_ubicaciones')
+    grabado = models.ForeignKey(Grabado, on_delete=models.PROTECT, related_name='historial_ubicaciones')
     ubicacion_anterior = models.CharField(max_length=200, blank=True, null=True,
                                           verbose_name="Ubicación anterior")
     ubicacion_nueva = models.CharField(max_length=200, verbose_name="Ubicación nueva")
@@ -550,6 +566,36 @@ class HistorialUbicacion(models.Model):
 
     def __str__(self):
         return f"{self.grabado}: {self.ubicacion_anterior or '—'} -> {self.ubicacion_nueva}"
+
+
+class HistorialActivacion(models.Model):
+    """
+    Una fila por cada desactivación o reactivación de un grabado. Solo la
+    escriben services.grabados.desactivar_grabado / reactivar_grabado.
+    """
+    ACCION_CHOICES = [
+        ('DESACTIVAR', 'Desactivado'),
+        ('REACTIVAR', 'Reactivado'),
+    ]
+
+    grabado = models.ForeignKey(Grabado, on_delete=models.PROTECT, related_name='historial_activaciones')
+    accion = models.CharField(max_length=20, choices=ACCION_CHOICES, verbose_name="Acción")
+    motivo = models.TextField(blank=True, default='', verbose_name="Motivo")
+    # Al desactivar: el estado que tenía. Al reactivar: el estado al que volvió.
+    estado = models.CharField(max_length=20, choices=Grabado.ESTADO_CHOICES, verbose_name="Estado")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='+', verbose_name="Usuario"
+    )
+    fecha = models.DateTimeField(auto_now_add=True, verbose_name="Fecha")
+
+    class Meta:
+        verbose_name = "Activación / desactivación"
+        verbose_name_plural = "Historial de activaciones"
+        ordering = ['-fecha', '-id']
+
+    def __str__(self):
+        return f"{self.grabado}: {self.get_accion_display()}"
 
 
 class LegadoOrden(models.Model):

@@ -651,6 +651,7 @@
     .estado--en-proceso { background: #cfe2ff; color: #084298; }
     .estado--cancelado  { background: #f8d7da; color: #842029; }
     .estado--en-revision{ background: #e2d9f3; color: #4a2b8c; }
+    .estado--inactivo   { background: #e2e3e5; color: #41464b; }
 
     /* Celda de ubicación / sobre (con ícono pin) */
     .celda-ubicacion {
