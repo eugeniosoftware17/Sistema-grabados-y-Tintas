@@ -8,6 +8,7 @@ usan la base `default` (test_CigarRingsEIS), que Django crea y borra sola.
 """
 import json
 import os
+import re
 import shutil
 import tempfile
 from datetime import date, datetime, timedelta, timezone as dt_timezone
@@ -1118,7 +1119,9 @@ class TextoLargoEnUnaLineaTests(BaseGrabados):
     def test_consulta_escapa_el_title_de_la_descripcion(self):
         js = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
         self.assertNotIn('title="${reg.desc}"', js)
-        self.assertIn('title="${tituloCelda(reg.desc)}"', js)
+        # celdaTexto escapa el title de toda celda de texto largo (descripción incluida).
+        self.assertIn('title="${tituloCelda(valor)}"', js)
+        self.assertIn("celdaTexto('desc', reg.desc", js)
 
 
 # ============================================================
@@ -1433,149 +1436,12 @@ class ConsultaHistoricaGrabadoTests(BaseGrabados):
         self.assertIn('data-patron="{}"'.format(servicio.PATRON_UBICACION.pattern), respuesta.content.decode())
 
 
-class ConsultaLimiteYFiltrosTests(BaseGrabados):
-    """Tabla de Consultas: sin filtro de fecha por defecto, las LIMITE_CONSULTA filas más
-    recientes (fecha de registro, luego id) y búsqueda/filtros sobre todo el historial."""
+class BaseConsulta(BaseGrabados):
+    """Tabla de Consultas con una sola fuente: una fila por EnvioMaquina y una por cada
+    grabado sin envíos; OrdenFabricacion y LegadoOrden no se leen."""
 
     def setUp(self):
         self.client.force_login(self.operario)
-
-    def orden(self, of, registro, proceso='STAMPING', **campos):
-        datos = {'descripcion': 'ANILLA', 'cliente': 'CLIENTE SA', 'estado': 'COMPLETADO',
-                 'fecha_registro': registro}
-        datos.update(campos)
-        return OrdenFabricacion.objects.create(of=of, proceso=proceso, **datos)
-
-    def consulta(self, q='', filtros=None, esperado=200):
-        params = {'q': q}
-        if filtros is not None:
-            params['filtros'] = json.dumps(filtros)
-        respuesta = self.client.get(reverse('grabados:api_consulta_registros'), params)
-        self.assertEqual(respuesta.status_code, esperado, respuesta.content)
-        return respuesta.json()
-
-    def ofs(self, respuesta):
-        return [r['of'] for r in respuesta['data']]
-
-    def test_por_defecto_las_mas_recientes_con_tope(self):
-        self.assertEqual(selectors.LIMITE_CONSULTA, 500)
-        self.orden('100', date(2024, 1, 5))
-        self.orden('101', None)                      # sin fecha de registro: al final
-        self.orden('102', date(2026, 9, 1))
-        self.orden('103', date(2026, 9, 1))          # misma fecha: gana el id más alto
-        self.orden('104', date(2025, 3, 1))
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 3):
-            res = self.consulta()
-        self.assertEqual(self.ofs(res), ['103', '102', '104'])
-        self.assertEqual((res['total'], res['limite']), (5, 3))
-
-    def test_of_vieja_aparece_al_buscarla(self):
-        vieja = self.orden('10567', date(2019, 2, 1), proceso='EMBOSSING', fecha_programada=None)
-        por_referencia = self.orden('22464', date(2019, 1, 1), referencia='10567.0')
-        for i in range(3):
-            self.orden(str(30000 + i), date(2026, 10, 1))
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 2):
-            self.assertNotIn('10567', self.ofs(self.consulta()))
-            res = self.consulta(q='10567')
-        self.assertEqual(([r['id'] for r in res['data']], res['total']), ([vieja.id, por_referencia.id], 2))
-
-    def test_busqueda_con_tope(self):
-        for i in range(4):
-            self.orden(str(40000 + i), date(2026, 1, 1 + i))
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 2):
-            res = self.consulta(q='4000')
-        self.assertEqual((self.ofs(res), res['total']), (['40003', '40002'], 4))
-
-    def test_filtro_por_columna_mira_todo_el_historial(self):
-        self.orden('10567', date(2019, 2, 1), cliente='VIEJO SA')
-        self.orden('20000', date(2026, 10, 1), cliente='NUEVO SA', maquina='')
-        self.orden('20001', date(2026, 10, 2), cliente='NUEVO SA', maquina='GIETZ 01')
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
-            res = self.consulta(filtros=[{'col': 'cliente', 'in': ['VIEJO SA']}])
-            self.assertEqual((self.ofs(res), res['total']), (['10567'], 1))
-        res = self.consulta(filtros=[{'col': 'cliente', 'fuera': ['NUEVO SA']}])
-        self.assertEqual(self.ofs(res), ['10567'])
-        # '—' = vacío o null; varios filtros se cumplen todos (aunque repitan columna).
-        res = self.consulta(filtros=[{'col': 'maquina', 'in': ['—']}, {'col': 'cliente', 'in': ['NUEVO SA']}])
-        self.assertEqual(self.ofs(res), ['20000'])
-        res = self.consulta(filtros=[{'col': 'estado', 'in': ['COMPLETADO']}, {'col': 'estado', 'in': ['REPETIR']}])
-        self.assertEqual(res['total'], 0)
-
-    def test_filtro_numerico_y_por_fecha(self):
-        self.orden('50000', date(2026, 1, 1), temp=150.0, fecha_programada=date(2026, 1, 10))
-        self.orden('50001', date(2026, 1, 2), temp=150.5)
-        self.orden('50002', date(2026, 1, 3))
-        res = self.consulta(filtros=[{'col': 'temp', 'in': ['150', '—']}])
-        self.assertEqual(self.ofs(res), ['50002', '50000'])
-        res = self.consulta(filtros=[{'col': 'fecha', 'desde': '2026-01-01', 'hasta': '2026-01-31'}])
-        self.assertEqual(self.ofs(res), ['50000'])
-        res = self.consulta(filtros=[{'col': 'fecha_reg', 'desde': '2026-01-02', 'hasta': None}])
-        self.assertEqual(self.ofs(res), ['50002', '50001'])
-
-    def test_filtro_de_ubicacion_usa_la_del_grabado(self):
-        grabado = self.registrar(of='22741', tipo='DIRECTO')['grabado']
-        servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='GBB-2-1', usuario=self.operario)
-        enlazada = self.orden('22741', date(2026, 1, 1), ubicacion='Cajón viejo')
-        LegadoOrden.objects.create(orden=enlazada, rol='USO', grabado=grabado)
-        self.orden('60000', date(2026, 1, 2), ubicacion='Cajón viejo')
-        self.assertEqual(self.ofs(self.consulta(filtros=[{'col': 'ubicacion', 'in': ['GBB-2-1']}])), ['22741'])
-        self.assertEqual(self.ofs(self.consulta(filtros=[{'col': 'ubicacion', 'in': ['Cajón viejo']}])), ['60000'])
-
-    def test_filtros_invalidos(self):
-        for filtros in ({'cliente': ['X']}, [{'col': 'nada', 'in': ['X']}], [{'col': 'temp', 'in': ['abc']}],
-                        [{'col': 'fecha', 'desde': '10/01/2026'}], [{'col': ['of'], 'in': []}],
-                        [{'col': 'of', 'in': ['1'] * (selectors.MAX_VALORES_FILTRO + 1)}]):
-            with self.subTest(filtros=filtros):
-                self.assertEqual(self.consulta(filtros=filtros, esperado=400)['status'], 'error')
-        respuesta = self.client.get(reverse('grabados:api_consulta_registros'), {'filtros': '{malo'})
-        self.assertEqual(respuesta.status_code, 400)
-
-    def test_valores_de_columna_de_todo_el_historial(self):
-        self.orden('10567', date(2019, 2, 1), cliente='VIEJO SA')
-        self.orden('20000', date(2026, 10, 1), cliente='NUEVO SA')
-        url = reverse('grabados:api_consulta_valores')
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
-            valores = self.client.get(url, {'col': 'cliente'}).json()['valores']
-        self.assertEqual(sorted(valores), ['NUEVO SA', 'VIEJO SA'])
-        self.assertEqual(self.client.get(url, {'col': 'cliente', 'q': '10567'}).json()['valores'], ['VIEJO SA'])
-        self.assertEqual(self.client.get(url, {'col': 'nada'}).status_code, 400)
-
-    def test_kpis_no_dependen_del_tope_ni_de_la_fecha(self):
-        viejo = date(2018, 1, 1)
-        for i, estado in enumerate(['EN_MAQUINA', 'EN_MAQUINA', 'REPETIR', 'PENDIENTE', 'PENDIENTE', 'PENDIENTE']):
-            self.orden(str(70000 + i), viejo, estado=estado, fecha_programada=None)
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
-            kpis = self.client.get(reverse('grabados:api_kpis')).json()
-        self.assertEqual((kpis['en_maquina'], kpis['para_repetir'], kpis['pendientes']), (2, 1, 3))
-        # Terminados hoy: por actualizado_el (hoy), no por la fecha de registro.
-        self.assertEqual(kpis['completados_hoy'], 1)
-
-    def test_estadisticas_siguen_recibiendo_todo(self):
-        for i in range(3):
-            self.orden(str(80000 + i), date(2026, 1, 1))
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
-            datos = self.client.get(reverse('grabados:api_registros')).json()
-        self.assertEqual(len(datos), 3)
-
-    def test_pantalla_sin_filtro_de_fecha_por_defecto(self):
-        js = (Path(__file__).parent / 'static' / 'js' / 'grabados_tabla.js').read_text(encoding='utf-8')
-        self.assertNotIn('setMonth(', js)
-        self.assertIn('/grabados/api/consulta/registros/', js)
-
-
-class ConsultaGrabadosNuevosTests(BaseGrabados):
-    """Tabla de Consultas con lo nuevo: grabados sin LegadoOrden como filas "Nuevo"
-    junto a OrdenFabricacion ("Sistema anterior"), con búsqueda, filtros, tope y
-    tarjetas sobre los dos orígenes."""
-
-    def setUp(self):
-        self.client.force_login(self.operario)
-
-    def orden(self, of, registro, proceso='STAMPING', **campos):
-        datos = {'descripcion': 'ANILLA', 'cliente': 'CLIENTE SA', 'estado': 'COMPLETADO',
-                 'fecha_registro': registro}
-        datos.update(campos)
-        return OrdenFabricacion.objects.create(of=of, proceso=proceso, **datos)
 
     def grabado(self, of, creado=None, tipo='DIRECTO', **cambios):
         grabado = self.registrar(of=of, tipo=tipo)['grabado']
@@ -1585,184 +1451,381 @@ class ConsultaGrabadosNuevosTests(BaseGrabados):
             Grabado.objects.filter(pk=grabado.pk).update(**cambios)
         return Grabado.objects.get(pk=grabado.pk)
 
-    def migrado(self, of, registro, **campos):
-        """Fila vieja ya migrada: su grabado tiene LegadoOrden y no sale como "Nuevo"."""
-        grabado = self.grabado(of)
-        orden = self.orden(of, registro, **campos)
-        LegadoOrden.objects.create(orden=orden, rol='USO', grabado=grabado)
-        return orden, grabado
+    def mandar(self, grabado, of, enviado=None, **fila):
+        envio = servicio.mandar_a_maquina(of=of, proceso=grabado.proceso, grabado_id=grabado.id,
+                                          fila=fila_excel(**fila), usuario=self.operario)
+        if enviado:
+            EnvioMaquina.objects.filter(pk=envio.pk).update(
+                enviado_el=datetime(enviado.year, enviado.month, enviado.day, 12, tzinfo=dt_timezone.utc))
+        return EnvioMaquina.objects.get(pk=envio.pk)
 
-    def consulta(self, q='', filtros=None):
+    def recoger(self, envio, estado='OK', ubicacion='GBB-1-1', comentario='', usuario=None):
+        return servicio.recoger_de_maquina(envio_id=envio.id, of=envio.of, estado_fisico=estado,
+                                           ubicacion=ubicacion, comentario=comentario,
+                                           usuario=usuario or self.operario)
+
+    def consulta(self, q='', filtros=None, esperado=200):
         params = {'q': q}
         if filtros is not None:
             params['filtros'] = json.dumps(filtros)
         respuesta = self.client.get(reverse('grabados:api_consulta_registros'), params)
-        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        self.assertEqual(respuesta.status_code, esperado, respuesta.content)
         return respuesta.json()
 
     def ids(self, respuesta):
         return [r['id'] for r in respuesta['data']]
 
+    def valores(self, **params):
+        respuesta = self.client.get(reverse('grabados:api_consulta_valores'), params)
+        self.assertEqual(respuesta.status_code, 200, respuesta.content)
+        return respuesta.json()
+
+
+class ConsultaUnaFuenteTests(BaseConsulta):
+
     # ------------------------------------------------------------ filas
-    def test_grabado_nuevo_es_una_fila_y_el_migrado_no_se_duplica(self):
-        nuevo = self.grabado('30000', creado=date(2026, 10, 5), ubicacion='GBB-1-2')
-        orden, migrado = self.migrado('30001', date(2026, 10, 1))
+    def test_una_fila_por_envio_y_una_por_grabado_sin_envio(self):
+        usado = self.grabado('22741')
+        primero = self.mandar(usado, '30000')
+        self.recoger(primero)
+        segundo = self.mandar(usado, '30001')
+        nuevo = self.grabado('22800')
         res = self.consulta()
-        self.assertEqual(self.ids(res), [f'g{nuevo.id}', orden.id])
-        self.assertEqual(res['total'], 2)
-        self.assertNotIn(f'g{migrado.id}', self.ids(res))
+        self.assertEqual(sorted(self.ids(res)), sorted([f'e{primero.id}', f'e{segundo.id}', f'g{nuevo.id}']))
+        self.assertNotIn(f'g{usado.id}', self.ids(res))   # ya tiene envíos: no sale como creación
+        self.assertEqual((res['total'], res['envios'], res['creaciones'], res['limite']), (3, 2, 1, 500))
+        self.assertNotIn('origen', res['data'][0])
 
-        fila = res['data'][0]
-        self.assertEqual(
-            {k: fila[k] for k in ('origen', 'of', 'cliente', 'desc', 'proceso', 'estado', 'tipo',
-                                  'ubicacion', 'sobre', 'fecha', 'fecha_reg', 'ref', 'maquina')},
-            {'origen': 'Nuevo', 'of': '30000', 'cliente': 'CLIENTE SA', 'desc': 'ANILLA DORADA',
-             'proceso': 'STAMPING', 'estado': 'APROBADO', 'tipo': 'DIRECTO', 'ubicacion': 'GBB-1-2',
-             'sobre': 'S-10', 'fecha': '—', 'fecha_reg': '05/10/2026', 'ref': None, 'maquina': None})
-        self.assertEqual((fila['grabado']['id'], fila['grabado']['ubicacion'], fila['motivo_sin_grabado']),
-                         (nuevo.id, 'GBB-1-2', None))
-        self.assertEqual(fila['grabado_mod'], selectors.formatear_fecha(nuevo.actualizado_el))
-        self.assertEqual(res['data'][1]['origen'], 'Sistema anterior')
+    def test_fila_de_envio_trae_los_datos_del_envio_y_de_su_grabado(self):
+        grabado = self.grabado('22741', ubicacion='GBB-1-2')
+        envio = self.mandar(grabado, '30000')
+        self.recoger(envio, estado='REPETIR', comentario='Rayado en el borde', usuario=self.supervisor)
+        grabado.refresh_from_db()
+        envio.refresh_from_db()
+        fila = self.consulta()['data'][0]
+        esperado = {
+            'id': f'e{envio.id}', 'tipo_fila': 'ENVIO', 'of': '30000', 'of_origen': '22741',
+            'cliente': 'CLIENTE SA', 'desc': 'ANILLA DORADA', 'proceso': 'STAMPING',
+            'estado': 'REPETIR', 'estado_display': grabado.get_estado_display(),
+            'tipo': 'DIRECTO', 'tipo_display': grabado.get_tipo_display(), 'ubicacion': 'GBB-1-1',
+            'sobre': 'S-10', 'usos': 0, 'maquina': 'GIETZ 01', 'fecha': '15/10/2026',
+            'cantidad': 1200, 'horas': 2.5, 'papel': 'Couché 90 g',
+            'enviado_el': selectors.formatear_fecha(envio.enviado_el), 'enviado_por': 'operario',
+            'recogido_el': selectors.formatear_fecha(envio.recogido_el), 'recogido_por': 'supervisor',
+            'estado_fisico': 'REPETIR', 'estado_fisico_display': 'Repetir',
+            'modificado': selectors.formatear_fecha(grabado.actualizado_el),
+        }
+        self.assertEqual({k: fila[k] for k in esperado}, esperado)
+        self.assertEqual(fila['grabado'], {'id': grabado.id, 'of_origen': '22741', 'proceso': 'STAMPING',
+                                           'ubicacion': 'GBB-1-1', 'estado': 'REPETIR',
+                                           'actualizado_el': fila['modificado']})
+        # Los datos técnicos solo van en el panel de detalle.
+        for tecnico in ('peso_i', 'peso_f', 'perdida', 'temp', 'rpm', 'tiempo_t', 'comp', 'responsables'):
+            self.assertNotIn(tecnico, fila)
 
-    def test_mezcla_por_fecha_de_registro_con_tope(self):
-        reciente = self.orden('100', date(2026, 10, 1))
-        vieja = self.orden('101', date(2026, 8, 1))
-        sin_fecha = self.orden('102', None)
-        medio = self.grabado('200', creado=date(2026, 9, 15))
-        mismo_dia = self.grabado('201', creado=date(2026, 10, 1))   # el mismo día: primero lo nuevo
+    def test_fila_de_creacion_sin_datos_de_envio_queda_en_blanco(self):
+        grabado = self.grabado('22741')
+        fila = self.consulta()['data'][0]
+        self.assertEqual((fila['id'], fila['tipo_fila'], fila['of'], fila['of_origen']),
+                         (f'g{grabado.id}', 'CREACION', '22741', '22741'))
+        for vacio in ('maquina', 'fecha', 'cantidad', 'horas', 'papel', 'enviado_el', 'enviado_por',
+                      'recogido_el', 'recogido_por', 'estado_fisico', 'estado_fisico_display'):
+            with self.subTest(columna=vacio):
+                self.assertIsNone(fila[vacio])     # en blanco, no 0
+        self.assertEqual(fila['usos'], 0)          # dato real del grabado
+
+    def test_of_de_origen_solo_se_ve_en_envios_de_otra_of(self):
+        grabado = self.grabado('7001')
+        repeticion = self.mandar(grabado, '23071')            # repetición que apunta a la 7001
+        self.recoger(repeticion)
+        misma = self.mandar(grabado, '7001.0')                # misma OF (normalizada)
+        self.recoger(misma)
+        rara = self.mandar(grabado, 'SIN NUMERO')             # no se puede comparar: en blanco
+        nuevo = self.grabado('22800')                         # creación
+        filas = {r['id']: r for r in self.consulta()['data']}
+        mostradas = {i: (f['of_origen'], f['of_origen_mostrar']) for i, f in filas.items()}
+        self.assertEqual(mostradas, {
+            f'e{repeticion.id}': ('7001', '7001'),
+            f'e{misma.id}': ('7001', None),
+            f'e{rara.id}': ('7001', None),
+            f'g{nuevo.id}': ('22800', None),
+        })
+        # Filtro y búsqueda usan el valor real: encuentran todas las filas de la 7001.
+        esperado = sorted([f'e{repeticion.id}', f'e{misma.id}', f'e{rara.id}'])
+        self.assertEqual(sorted(self.ids(self.consulta(filtros=[{'col': 'of_origen', 'in': ['7001']}]))), esperado)
+        self.assertEqual(sorted(self.ids(self.consulta(q='7001'))), esperado)
+        self.assertEqual(sorted(self.valores(col='of_origen')['valores']), ['22800', '7001'])
+
+    def test_maquina_sin_maquina_legado_en_blanco_pero_filtrable(self):
+        from apps.gestion_grabados.management.commands.migrar_a_grabados import MAQUINA_SIN_NOMBRE
+        legado = Maquina.objects.create(nombre=MAQUINA_SIN_NOMBRE)
+        grabado = self.grabado('22741')
+        envio_legado = self.mandar(grabado, '30000')
+        EnvioMaquina.objects.filter(pk=envio_legado.pk).update(maquina=legado)
+        self.recoger(envio_legado)
+        envio_gietz = self.mandar(grabado, '30001')
+        filas = {r['id']: r for r in self.consulta()['data']}
+        self.assertEqual((filas[f'e{envio_legado.id}']['maquina'], filas[f'e{envio_legado.id}']['maquina_mostrar']),
+                         (MAQUINA_SIN_NOMBRE, None))
+        self.assertEqual(filas[f'e{envio_gietz.id}']['maquina_mostrar'], 'GIETZ 01')
+        self.assertIn(MAQUINA_SIN_NOMBRE, self.valores(col='maquina')['valores'])
+        res = self.consulta(filtros=[{'col': 'maquina', 'in': [MAQUINA_SIN_NOMBRE]}])
+        self.assertEqual(self.ids(res), [f'e{envio_legado.id}'])
+        # La celda y su tooltip usan lo que se ve ("—" sin valor), no el nombre real.
+        js = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
+        self.assertIn("celdaTexto('maquina', conRaya(reg.maquina_mostrar)", js)
+        self.assertIn("celdaTexto('of_origen', conRaya(reg.of_origen_mostrar)", js)
+        self.assertIn("return valor === null || valor === undefined || valor === '' ? VACIO : valor;", js)
+        self.assertIn("const VACIO = '—';", js)
+        self.assertIn("mostrar: 'of_origen_mostrar'", js)
+        self.assertIn("mostrar: 'maquina_mostrar'", js)
+
+    def test_envio_sin_cantidad_ni_horas_queda_en_blanco(self):
+        grabado = self.grabado('22741')
+        self.mandar(grabado, '30000', cantidad_formatos=None, horas_proceso=None, papel=None, fecha_programada=None)
+        fila = self.consulta()['data'][0]
+        self.assertEqual((fila['cantidad'], fila['horas'], fila['papel'], fila['fecha']), (None, None, None, None))
+
+    def test_orden_por_fecha_de_envio_o_creacion_con_tope(self):
+        viejo = self.grabado('100', creado=date(2026, 1, 1))
+        envio_viejo = self.mandar(viejo, '30000', enviado=date(2026, 8, 1))
+        reciente = self.grabado('101', creado=date(2026, 9, 1))
+        envio_reciente = self.mandar(reciente, '30001', enviado=date(2026, 10, 1))
+        creado_medio = self.grabado('102', creado=date(2026, 9, 15))
+        creado_viejo = self.grabado('103', creado=date(2025, 1, 1))
         res = self.consulta()
-        self.assertEqual(self.ids(res), [f'g{mismo_dia.id}', reciente.id, f'g{medio.id}', vieja.id, sin_fecha.id])
-        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 3):
+        self.assertEqual(self.ids(res), [f'e{envio_reciente.id}', f'g{creado_medio.id}', f'e{envio_viejo.id}',
+                                         f'g{creado_viejo.id}'])
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 2):
             res = self.consulta()
-        self.assertEqual(self.ids(res), [f'g{mismo_dia.id}', reciente.id, f'g{medio.id}'])
-        self.assertEqual((res['total'], res['limite']), (5, 3))
+        self.assertEqual(self.ids(res), [f'e{envio_reciente.id}', f'g{creado_medio.id}'])
+        self.assertEqual((res['total'], res['envios'], res['creaciones'], res['limite']), (4, 2, 2, 2))
 
-    def test_tope_entre_los_dos_origenes_mira_todo_el_historial(self):
+    def test_ordenes_viejas_no_se_muestran_ni_se_tocan(self):
+        # OF 9408: SIN_MIGRAR, pendiente y sin datos técnicos.
+        sin_migrar = OrdenFabricacion.objects.create(of='9408', proceso='STAMPING', estado='PENDIENTE',
+                                                     cliente='CLIENTE VIEJO')
+        LegadoOrden.objects.create(orden=sin_migrar, rol='SIN_MIGRAR', grabado=None)
+        grabado = self.grabado('22741')
+        migrada = OrdenFabricacion.objects.create(of='22741', proceso='STAMPING', estado='COMPLETADO',
+                                                  ubicacion='Cajón viejo')
+        LegadoOrden.objects.create(orden=migrada, rol='FABRICACION', grabado=grabado)
+        antes = (list(OrdenFabricacion.objects.order_by('id').values()),
+                 list(LegadoOrden.objects.order_by('id').values()))
+
+        res = self.consulta()
+        self.assertEqual((self.ids(res), res['total']), ([f'g{grabado.id}'], 1))   # la migrada, por su grabado
+        self.assertEqual(self.consulta(q='9408')['total'], 0)
+        self.assertNotIn('9408', self.valores(col='of')['valores'])
+        self.assertNotIn('CLIENTE VIEJO', self.valores(col='cliente')['valores'])
+        self.client.get(reverse('grabados:api_kpis'))
+        self.client.post(reverse('grabados:api_grabado_ubicacion', kwargs={'grabado_id': grabado.id}),
+                         data=json.dumps({'ubicacion': 'GBB-9-9', 'origen': 'CONSULTA'}),
+                         content_type='application/json')
+
+        self.assertEqual((list(OrdenFabricacion.objects.order_by('id').values()),
+                          list(LegadoOrden.objects.order_by('id').values())), antes)
+
+    # ------------------------------------------------------- búsqueda
+    def test_busqueda_por_of_del_envio_origen_cliente_y_maquina(self):
+        grabado = self.grabado('22741', cliente='TABACALERA DEL CIBAO', ubicacion='GBB-4-4')
+        envio = self.mandar(grabado, '30500')
+        otro = self.grabado('22800', cliente='OTRO SA')
+        self.assertEqual(self.ids(self.consulta(q='30500')), [f'e{envio.id}'])
+        for q in ('22741', 'cibao', 'gbb-4', 'gietz', 'tabacalera stamping'):
+            with self.subTest(q=q):
+                self.assertEqual(self.ids(self.consulta(q=q)), [f'e{envio.id}'])
+        self.assertEqual(self.ids(self.consulta(q='otro')), [f'g{otro.id}'])
+        self.assertEqual(self.consulta(q='nada')['total'], 0)
+
+    def test_busqueda_mira_todo_el_historial_con_tope(self):
+        viejo = self.grabado('399', creado=date(2020, 1, 1))
         for i in range(3):
             self.grabado(str(300 + i), creado=date(2026, 10, 1 + i))
-        viejo = self.grabado('399', creado=date(2020, 1, 1))
         with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 2):
             self.assertNotIn(f'g{viejo.id}', self.ids(self.consulta()))
             res = self.consulta(q='399')
         self.assertEqual((self.ids(res), res['total']), ([f'g{viejo.id}'], 1))
 
-    # ------------------------------------------------------- búsqueda
-    def test_busqueda_en_filas_nuevas_y_por_of_del_envio(self):
-        grabado = self.grabado('22741', cliente='TABACALERA DEL CIBAO', ubicacion='GBB-4-4')
-        self.orden('40000', date(2026, 1, 1))
-        for q in ('22741', 'cibao', 'gbb-4', 'aprobado', 'tabacalera stamping'):
-            with self.subTest(q=q):
-                self.assertEqual(self.ids(self.consulta(q=q)), [f'g{grabado.id}'])
-        servicio.mandar_a_maquina(of='30500', proceso='STAMPING', grabado_id=grabado.id,
-                                  fila=fila_excel(), usuario=self.operario)
-        # La OF del PLANI no es fila propia: buscarla encuentra el grabado con que se tiró.
-        res = self.consulta(q='30500')
-        self.assertEqual((self.ids(res), res['total']), ([f'g{grabado.id}'], 1))
-        self.assertEqual(self.consulta(q='nada')['total'], 0)
-
     # -------------------------------------------------------- filtros
-    def test_filtro_por_origen(self):
-        nuevo = self.grabado('30000')
-        orden = self.orden('40000', date(2026, 1, 1))
-        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'in': ['Nuevo']}])), [f'g{nuevo.id}'])
-        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'fuera': ['Nuevo']}])), [orden.id])
-        self.assertEqual(self.ids(self.consulta(filtros=[{'col': 'origen', 'in': ['Sistema anterior']}])),
-                         [orden.id])
-        self.assertEqual(self.consulta(filtros=[{'col': 'origen', 'in': []}])['total'], 0)
-
-    def test_filtros_por_columna_en_filas_nuevas(self):
-        nuevo = self.grabado('30000', cliente='NUEVO SA')
-        orden = self.orden('40000', date(2026, 1, 1), cliente='VIEJO SA', maquina='GIETZ 01')
+    def test_filtros_por_columna(self):
+        usado = self.grabado('22741', cliente='USADO SA')
+        envio = self.mandar(usado, '30000')
+        self.recoger(envio)
+        nuevo = self.grabado('22800', cliente='NUEVO SA', tipo='K1')
+        e, g = f'e{envio.id}', f'g{nuevo.id}'
         casos = [
-            ([{'col': 'cliente', 'in': ['NUEVO SA']}], [f'g{nuevo.id}']),
-            ([{'col': 'cliente', 'fuera': ['NUEVO SA']}], [orden.id]),
-            ([{'col': 'estado', 'in': ['APROBADO']}], [f'g{nuevo.id}']),
-            ([{'col': 'tipo', 'in': ['DIRECTO']}], [f'g{nuevo.id}']),
-            # Columnas que el grabado no tiene: vacías ('—').
-            ([{'col': 'maquina', 'in': ['—']}], [f'g{nuevo.id}']),
-            ([{'col': 'maquina', 'in': ['GIETZ 01']}], [orden.id]),
-            ([{'col': 'maquina', 'fuera': ['—']}], [orden.id]),
-            ([{'col': 'temp', 'in': ['150']}], []),
+            ([{'col': 'cliente', 'in': ['NUEVO SA']}], [g]),
+            ([{'col': 'cliente', 'fuera': ['NUEVO SA']}], [e]),
+            ([{'col': 'of', 'in': ['30000']}], [e]),
+            ([{'col': 'of_origen', 'in': ['22741']}], [e]),
+            ([{'col': 'estado', 'in': ['PENDIENTE_K1']}], [g]),
+            ([{'col': 'tipo', 'in': ['DIRECTO']}], [e]),
+            ([{'col': 'estado_fisico', 'in': ['OK']}], [e]),
+            ([{'col': 'enviado_por', 'in': ['operario']}], [e]),
+            ([{'col': 'cantidad', 'in': ['1200']}], [e]),
+            ([{'col': 'horas', 'in': ['2.5']}], [e]),
+            ([{'col': 'usos', 'in': ['1']}], [e]),
+            # Lo que la fila de creación no tiene: vacío ('—').
+            ([{'col': 'maquina', 'in': ['—']}], [g]),
+            ([{'col': 'maquina', 'fuera': ['—']}], [e]),
+            ([{'col': 'cantidad', 'in': ['—']}], [g]),
+            # Varios filtros se cumplen todos (aunque repitan columna).
+            ([{'col': 'estado', 'in': ['APROBADO']}, {'col': 'estado', 'in': ['REPETIR']}], []),
         ]
         for filtros, esperado in casos:
             with self.subTest(filtros=filtros):
                 self.assertEqual(self.ids(self.consulta(filtros=filtros)), esperado)
 
-    def test_boton_fecha_y_fecha_de_registro(self):
-        nuevo = self.grabado('30000', creado=date(2026, 9, 10))
-        orden = self.orden('40000', date(2026, 9, 1), fecha_programada=date(2026, 9, 5))
-        # Fecha Prog.: el grabado no tiene, así que no pasa (como una fila vieja sin fecha).
-        res = self.consulta(filtros=[{'col': 'fecha', 'desde': '2026-09-01', 'hasta': '2026-09-30'}])
-        self.assertEqual(self.ids(res), [orden.id])
-        res = self.consulta(filtros=[{'col': 'fecha_reg', 'desde': '2026-09-05', 'hasta': '2026-09-30'}])
-        self.assertEqual(self.ids(res), [f'g{nuevo.id}'])
-        res = self.consulta(filtros=[{'col': 'fecha_reg', 'desde': None, 'hasta': '2026-09-09'}])
-        self.assertEqual(self.ids(res), [orden.id])
+    def test_boton_fecha_y_rangos_de_fecha(self):
+        grabado = self.grabado('22741', creado=date(2026, 9, 1))
+        envio = self.mandar(grabado, '30000', enviado=date(2026, 9, 20))
+        nuevo = self.grabado('22800', creado=date(2026, 9, 10))
+        # Fecha prog. (botón Fecha): la fila de creación no tiene y no pasa.
+        res = self.consulta(filtros=[{'col': 'fecha', 'desde': '2026-10-01', 'hasta': '2026-10-31'}])
+        self.assertEqual(self.ids(res), [f'e{envio.id}'])
+        self.assertEqual(self.consulta(filtros=[{'col': 'fecha', 'desde': '2026-11-01'}])['total'], 0)
+        res = self.consulta(filtros=[{'col': 'enviado_el', 'desde': '2026-09-15', 'hasta': '2026-09-30'}])
+        self.assertEqual(self.ids(res), [f'e{envio.id}'])
+        hoy = timezone.localdate().isoformat()
+        res = self.consulta(filtros=[{'col': 'modificado', 'desde': hoy, 'hasta': hoy}])
+        self.assertEqual(sorted(self.ids(res)), sorted([f'e{envio.id}', f'g{nuevo.id}']))
+        self.assertEqual(self.consulta(filtros=[{'col': 'modificado', 'hasta': '2020-01-01'}])['total'], 0)
 
-    def test_valores_de_columna_juntan_los_dos_origenes(self):
-        self.grabado('30000', cliente='NUEVO SA')
-        self.orden('40000', date(2026, 1, 1), cliente='VIEJO SA', maquina='GIETZ 01')
-        url = reverse('grabados:api_consulta_valores')
-        valores = lambda **p: self.client.get(url, p).json()['valores']
-        self.assertEqual(sorted(valores(col='cliente')), ['NUEVO SA', 'VIEJO SA'])
-        self.assertEqual(sorted(valores(col='origen')), ['Nuevo', 'Sistema anterior'])
-        self.assertIn(None, valores(col='maquina'))            # la fila nueva no tiene máquina
-        self.assertEqual(valores(col='origen', q='30000'), ['Nuevo'])
-        self.assertIn('APROBADO', valores(col='estado'))
+    def test_filtros_invalidos(self):
+        for filtros in ({'cliente': ['X']}, [{'col': 'nada', 'in': ['X']}], [{'col': 'origen', 'in': ['Nuevo']}],
+                        [{'col': 'temp', 'in': ['150']}], [{'col': 'cantidad', 'in': ['abc']}],
+                        [{'col': 'fecha', 'desde': '10/01/2026'}], [{'col': ['of'], 'in': []}],
+                        [{'col': 'of', 'in': ['1'] * (selectors.MAX_VALORES_FILTRO + 1)}]):
+            with self.subTest(filtros=filtros):
+                self.assertEqual(self.consulta(filtros=filtros, esperado=400)['status'], 'error')
+        respuesta = self.client.get(reverse('grabados:api_consulta_registros'), {'filtros': '{malo'})
+        self.assertEqual(respuesta.status_code, 400)
+
+    def test_valores_de_columna_juntan_envios_y_creaciones(self):
+        usado = self.grabado('22741', cliente='USADO SA')
+        self.mandar(usado, '30000')
+        self.grabado('22800', cliente='NUEVO SA')
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
+            self.assertEqual(sorted(self.valores(col='cliente')['valores']), ['NUEVO SA', 'USADO SA'])
+        self.assertEqual(self.valores(col='cliente', q='22800')['valores'], ['NUEVO SA'])
+        self.assertEqual(sorted(self.valores(col='of')['valores']), ['22800', '30000'])
+        maquinas = self.valores(col='maquina')['valores']
+        self.assertIn(None, maquinas)              # la fila de creación no tiene máquina
+        self.assertIn('GIETZ 01', maquinas)
+        estado = self.valores(col='estado')
+        self.assertEqual(sorted(estado['valores']), ['APROBADO', 'EN_MAQUINA'])
+        self.assertEqual(estado['etiquetas']['EN_MAQUINA'], dict(Grabado.ESTADO_CHOICES)['EN_MAQUINA'])
+        self.assertEqual(self.valores(col='cliente')['etiquetas'], {})
+        self.assertEqual(self.client.get(reverse('grabados:api_consulta_valores'), {'col': 'origen'}).status_code, 400)
 
     # -------------------------------------------- panel y ubicación
-    def test_ubicacion_de_fila_nueva_se_edita_con_cambiar_ubicacion(self):
-        nuevo = self.grabado('30000', ubicacion='GBB-1-1')
-        url = reverse('grabados:api_grabado_ubicacion', kwargs={'grabado_id': nuevo.id})
+    def test_ubicacion_se_edita_con_cambiar_ubicacion_en_todas_las_filas_del_grabado(self):
+        grabado = self.grabado('22741', ubicacion='GBB-1-1')
+        self.recoger(self.mandar(grabado, '30000'))
+        self.mandar(grabado, '30001')
+        url = reverse('grabados:api_grabado_ubicacion', kwargs={'grabado_id': grabado.id})
         respuesta = self.client.post(url, data=json.dumps({'ubicacion': 'gbb-2-3', 'origen': 'CONSULTA'}),
                                      content_type='application/json')
         self.assertEqual(respuesta.status_code, 200, respuesta.content)
-        cambio = HistorialUbicacion.objects.get(grabado=nuevo)
-        self.assertEqual((cambio.ubicacion_anterior, cambio.ubicacion_nueva, cambio.origen),
-                         ('GBB-1-1', 'GBB-2-3', 'CONSULTA'))
-        fila = self.consulta()['data'][0]
-        self.assertEqual((fila['ubicacion'], fila['grabado']['ubicacion']), ('GBB-2-3', 'GBB-2-3'))
+        cambio = HistorialUbicacion.objects.filter(grabado=grabado).latest('id')
+        self.assertEqual((cambio.ubicacion_nueva, cambio.origen, cambio.usuario), ('GBB-2-3', 'CONSULTA', self.operario))
+        filas = self.consulta()['data']
+        self.assertEqual(len(filas), 2)
+        for fila in filas:
+            self.assertEqual((fila['ubicacion'], fila['grabado']['ubicacion'], fila['modificado']),
+                             ('GBB-2-3', 'GBB-2-3', respuesta.json()['actualizado_el']))
 
-    def test_pantalla_con_columna_origen_y_panel_para_filas_nuevas(self):
+    def test_inactivo_se_muestra_y_se_filtra(self):
+        activo = self.grabado('22741')
+        inactivo = self.grabado('22800')
+        servicio.desactivar_grabado(grabado_id=inactivo.id, motivo='Pieza dañada', usuario=self.operario)
+        self.assertContains(self.client.get(reverse('grabados:grabado_consulta')), '<option value="INACTIVO">')
+        filas = {r['id']: r for r in self.consulta()['data']}
+        self.assertEqual((filas[f'g{inactivo.id}']['estado'], filas[f'g{inactivo.id}']['grabado']['estado']),
+                         ('INACTIVO', 'INACTIVO'))
+        self.assertEqual(filas[f'g{activo.id}']['grabado']['estado'], 'APROBADO')
+        res = self.consulta(filtros=[{'col': 'estado', 'in': ['INACTIVO']}])
+        self.assertEqual(self.ids(res), [f'g{inactivo.id}'])
+        self.assertIn('INACTIVO', self.valores(col='estado')['valores'])
+
+    def test_pantalla_sin_origen_ni_editar_ni_eliminar(self):
         html = self.client.get(reverse('grabados:grabado_consulta')).content.decode()
-        self.assertIn('data-col="origen"', html)
-        self.assertIn('data-columna="origen"', html)
-        js = (Path(__file__).parent / 'static' / 'js' / 'grabados_tabla.js').read_text(encoding='utf-8')
-        self.assertIn("'origen'", js)
-        self.assertIn('window.PanelGrabado.abrir(reg.grabado.id);', js)
+        for fuera in ('data-col="origen"', 'Sistema anterior', 'USER_IS_ADMIN', '(nuevo)'):
+            with self.subTest(fuera=fuera):
+                self.assertNotIn(fuera, html)
+        self.assertIn('id="tabla-encabezado"', html)
+        js = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
+        for fuera in ("'origen'", 'Sistema anterior', 'eliminarRegistro', 'editarRegistro', '/api/eliminar/',
+                      'abrirOrden', 'ordenfabricacion', 'setMonth('):
+            with self.subTest(fuera=fuera):
+                self.assertNotIn(fuera, js)
+        self.assertIn('window.PanelGrabado.abrir(reg.grabado.id)', js)
+        self.assertIn('/grabados/api/consulta/registros/', js)
+
+    def test_columnas_por_defecto_y_opcionales(self):
+        js = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
+        por_defecto = ['of', 'of_origen', 'cliente', 'desc', 'proceso', 'estado', 'maquina', 'ubicacion',
+                       'fecha', 'modificado']
+        opcionales = ['sobre', 'cantidad', 'horas', 'papel', 'enviado_el', 'enviado_por', 'recogido_el',
+                      'recogido_por', 'estado_fisico', 'tipo', 'usos']
+        columnas = re.findall(r"\{ id: '(\w+)',([^}]*)\}", js)
+        self.assertEqual([c for c, resto in columnas if 'defecto: true' in resto], por_defecto)
+        self.assertEqual([c for c, resto in columnas if 'defecto: true' not in resto], opcionales)
+        # Toda columna de la pantalla se puede filtrar en el servidor.
+        self.assertEqual(set(selectors.CAMPOS_CONSULTA) | set(selectors.CAMPOS_FECHA_CONSULTA),
+                         set(por_defecto) | set(opcionales))
 
     # ------------------------------------------------------- tarjetas
-    def test_tarjetas_suman_lo_nuevo_sin_contar_dos_veces(self):
-        viejo = date(2018, 1, 1)
-        # En máquina: fila vieja sin migrar + envío abierto. La fila vieja migrada con grabado
-        # no cuenta (la representa su grabado/envío).
-        self.orden('70000', viejo, estado='EN_MAQUINA')
-        self.migrado('70001', viejo, estado='EN_MAQUINA')
-        en_maquina = self.grabado('70002')
-        servicio.mandar_a_maquina(of='71000', proceso='STAMPING', grabado_id=en_maquina.id,
-                                  fila=fila_excel(), usuario=self.operario)
-        # Terminados hoy: envío recogido hoy (OK).
-        recogido = self.grabado('70003')
-        envio = servicio.mandar_a_maquina(of='71001', proceso='STAMPING', grabado_id=recogido.id,
-                                          fila=fila_excel(), usuario=self.operario)
-        servicio.recoger_de_maquina(envio_id=envio.id, of='71001', estado_fisico='OK', ubicacion='GBB-1-1',
-                                    comentario='', usuario=self.operario)
-        # Para repetir: fila vieja REPETIR sin migrar + todos los grabados en REPETIR; la fila
-        # vieja migrada cuenta una sola vez, por su grabado.
-        self.orden('70004', viejo, estado='REPETIR')
-        _, repetir_migrado = self.migrado('70005', viejo, estado='REPETIR')
-        Grabado.objects.filter(pk=repetir_migrado.pk).update(estado='REPETIR')
-        self.grabado('70006', estado='REPETIR')
-        # Pendientes: fila vieja PENDIENTE (SIN_MIGRAR) + grabados en fabricación o K1.
-        pendiente = self.orden('70007', viejo, estado='PENDIENTE')
-        LegadoOrden.objects.create(orden=pendiente, rol='SIN_MIGRAR', grabado=None)
-        self.registrar(of='70008', tipo='K1')                        # PENDIENTE_K1
-        self.grabado('70009', estado='EN_FABRICACION')
+    def test_tarjetas_cuadran_con_el_inventario(self):
+        en_maquina = self.grabado('70000')
+        self.mandar(en_maquina, '71000')
+        self.grabado('70001', estado='REPETIR')
+        self.grabado('70002', estado='EN_FABRICACION')
+        self.registrar(of='70003', tipo='K1')                      # PENDIENTE_K1
+        self.grabado('70004')                                      # APROBADO: no cuenta
+        # Filas viejas sin migrar: ya no cuentan.
+        for i, estado in enumerate(['EN_MAQUINA', 'REPETIR', 'PENDIENTE', 'COMPLETADO']):
+            OrdenFabricacion.objects.create(of=str(80000 + i), proceso='STAMPING', estado=estado)
 
         kpis = self.client.get(reverse('grabados:api_kpis')).json()
-        self.assertEqual((kpis['en_maquina'], kpis['para_repetir'], kpis['pendientes']), (2, 3, 3))
-        # Hoy: el envío recogido + las 2 filas viejas REPETIR (actualizado_el = hoy al crearlas).
-        self.assertEqual(kpis['completados_hoy'], 3)
+        conteos = self.client.get(reverse('grabados:api_inventario')).json()['conteos']
+        self.assertEqual(kpis['en_maquina'], conteos['EN_MAQUINA'])
+        self.assertEqual(kpis['para_repetir'], conteos['REPETIR'])
+        self.assertEqual(kpis['pendientes'], conteos['EN_FABRICACION'] + conteos['PENDIENTE_K1'])
+        self.assertEqual((kpis['en_maquina'], kpis['para_repetir'], kpis['pendientes'], kpis['completados_hoy']),
+                         (1, 1, 2, 0))
+
+    def test_terminados_hoy_son_los_envios_recogidos_hoy(self):
+        hoy = self.grabado('70000')
+        self.recoger(self.mandar(hoy, '71000'))
+        repetir = self.grabado('70001')
+        self.recoger(self.mandar(repetir, '71001'), estado='REPETIR', comentario='Rayado en el borde')
+        ayer = self.grabado('70002')
+        envio_ayer = self.mandar(ayer, '71002')
+        self.recoger(envio_ayer)
+        EnvioMaquina.objects.filter(pk=envio_ayer.pk).update(recogido_el=timezone.now() - timedelta(days=1))
+        self.mandar(self.grabado('70003'), '71003')                # abierto: no cuenta
+        self.assertEqual(self.client.get(reverse('grabados:api_kpis')).json()['completados_hoy'], 2)
+
+    # ------------------------------------------- respaldo y Estadísticas
+    def test_eliminar_ordenes_viejas_retirado(self):
+        OrdenFabricacion.objects.create(of='22741', proceso='STAMPING')
+        self.client.force_login(self.admin)
+        respuesta = self.client.post(reverse('grabados:api_eliminar'),
+                                     data=json.dumps({'of': '22741', 'proceso': 'STAMPING'}),
+                                     content_type='application/json')
+        self.assertEqual(respuesta.status_code, 410)
+        self.assertEqual(respuesta.json()['status'], 'error')
+        self.assertTrue(OrdenFabricacion.objects.filter(of='22741').exists())
+
+    def test_estadisticas_siguen_leyendo_ordenes_viejas(self):
+        for i in range(3):
+            OrdenFabricacion.objects.create(of=str(80000 + i), proceso='STAMPING', estado='COMPLETADO')
+        self.grabado('22741')
+        with mock.patch('apps.gestion_grabados.selectors.LIMITE_CONSULTA', 1):
+            datos = self.client.get(reverse('grabados:api_registros')).json()
+        self.assertEqual(sorted(r['of'] for r in datos), ['80000', '80001', '80002'])
 
 
 # ============================================================
@@ -2211,28 +2274,15 @@ class PermisosModuloGrabadosTests(BaseGrabados):
             with self.subTest(visible=visible):
                 self.assertContains(respuesta, visible)
 
-    def test_eliminar_sigue_exigiendo_is_staff(self):
+    def test_eliminar_sin_permiso_del_modulo_no_entra(self):
         OrdenFabricacion.objects.create(of='22741', proceso='STAMPING')
         url = reverse('grabados:api_eliminar')
-        datos = json.dumps({'of': '22741', 'proceso': 'STAMPING'})
-
-        self.client.force_login(self.operario)   # con acceso al módulo, sin is_staff
-        respuesta = self.client.post(url, data=datos, content_type='application/json')
-        self.assertEqual(respuesta.status_code, 403)
-        self.assertIn('eliminar', respuesta.json()['message'])
-        self.assertTrue(OrdenFabricacion.objects.exists())
-
         staff_sin_modulo = User.objects.create_user('staff_sin_modulo', password='x', is_staff=True)
         self.client.force_login(staff_sin_modulo)
-        self.assertEqual(self.client.post(url, data=datos, content_type='application/json').status_code, 403)
+        self.assertEqual(self.client.post(url, data='{}', content_type='application/json').status_code, 403)
+        self.client.force_login(self.operario)
+        self.assertEqual(self.client.post(url, data='{}', content_type='application/json').status_code, 410)
         self.assertTrue(OrdenFabricacion.objects.exists())
-
-        self.supervisor.is_staff = True
-        self.supervisor.save()
-        self.client.force_login(self.supervisor)
-        respuesta = self.client.post(url, data=datos, content_type='application/json')
-        self.assertEqual(respuesta.status_code, 200, respuesta.content)
-        self.assertFalse(OrdenFabricacion.objects.exists())
 
     def test_grupo_grabados_y_supervisores_eliminado(self):
         grupo = Group.objects.get(name=GRUPO_GRABADOS)
@@ -2794,24 +2844,6 @@ class DesactivarGrabadoTests(BasePlani):
         self.assertEqual([g['id'] for g in res['data']], [inactivo.id])
         self.assertEqual(res['data'][0]['estado_display'], 'Inactivo')
         self.assertNotEqual(activo.id, inactivo.id)
-
-    def test_tabla_de_consultas_muestra_y_filtra_inactivos(self):
-        activo = self.aprobado()
-        inactivo = self.aprobado(of='22800')
-        self.desactivar(inactivo)
-        self.client.force_login(self.operario)
-        self.assertContains(self.client.get(reverse('grabados:grabado_consulta')), '<option value="INACTIVO">')
-
-        filas = {r['id']: r for r in self.client.get(reverse('grabados:api_consulta_registros')).json()['data']}
-        self.assertEqual(filas[f'g{inactivo.id}']['estado'], 'INACTIVO')
-        self.assertEqual(filas[f'g{inactivo.id}']['grabado']['estado'], 'INACTIVO')
-        self.assertEqual(filas[f'g{activo.id}']['grabado']['estado'], 'APROBADO')
-
-        res = self.client.get(reverse('grabados:api_consulta_registros'),
-                              {'filtros': json.dumps([{'col': 'estado', 'in': ['INACTIVO']}])}).json()
-        self.assertEqual([r['id'] for r in res['data']], [f'g{inactivo.id}'])
-        valores = self.client.get(reverse('grabados:api_consulta_valores'), {'col': 'estado'}).json()
-        self.assertIn('INACTIVO', json.dumps(valores))
 
     def test_fila_vieja_enlazada_trae_el_estado_del_grabado(self):
         grabado = self.aprobado()
@@ -3550,7 +3582,7 @@ class EtiquetaBotonesTests(BaseGrabados):
         self.assertIn('Etiqueta.imprimirSobre(sobre.id)', (RUTA_JS / 'sobres.js').read_text(encoding='utf-8'))
         tabla = (RUTA_JS / 'grabados_tabla.js').read_text(encoding='utf-8')
         self.assertIn('Etiqueta.imprimirGrabado(etiqueta.dataset.etiqueta)', tabla)
-        self.assertIn('Sin grabado en EIS: no hay etiqueta que imprimir', tabla)
+        self.assertIn('data-etiqueta="${reg.grabado.id}"', tabla)
         self.assertIn('Etiqueta.imprimirGrabado(res.grabado_id)',
                       (RUTA_JS / 'plani_tabla.js').read_text(encoding='utf-8'))
 

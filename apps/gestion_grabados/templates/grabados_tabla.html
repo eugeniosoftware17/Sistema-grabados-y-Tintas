@@ -16,10 +16,6 @@
     .consulta-fila:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
     /* Ubicación del grabado: doble clic para editar. */
     .consulta-ubicacion { cursor: text; white-space: nowrap; }
-    /* Columna Origen: "Sistema anterior" (OrdenFabricacion) o "Nuevo" (grabado de EIS). */
-    .consulta-origen { font-size: 11px; color: #6b7280; white-space: nowrap; }
-    .consulta-origen--nuevo { display: inline-block; padding: 1px 8px; border-radius: 10px;
-                              background: #e6f4ea; color: #1e5d2b; font-weight: 600; }
     .consulta-ubicacion:hover { background: #f0f9f4; }
     .consulta-ubicacion:focus-visible { outline: 2px solid #2d8a3e; outline-offset: -2px; }
     .consulta-ubicacion--bloqueada { cursor: not-allowed; color: #7a9485; }
@@ -31,6 +27,18 @@
     .consulta-ubicacion--bloqueada .consulta-ubicacion__error { color: #a35f00; white-space: nowrap; }
     .consulta-ubicacion__error:empty { display: none; }
     .consulta-modificado { white-space: nowrap; }
+    /* Filtro por columna */
+    .indicador-filtro-columna { width: 6px; height: 6px; border-radius: 50%; background: #f39c12;
+                                margin-left: 1px; vertical-align: middle; }
+    .filtro-columna-buscador { position: sticky; top: 0; background: #fff; padding: 6px 14px;
+                               border-bottom: 1px solid var(--color-borde); }
+    .filtro-columna-buscador input { width: 100%; box-sizing: border-box; padding: 5px 8px;
+                                     border: 1px solid var(--color-borde); border-radius: 6px; font-size: 12px; }
+    .filtro-columna-fechas { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .filtro-columna-fechas label { font-size: 11px; font-weight: 600; color: var(--color-texto-suave); }
+    .filtro-columna-fechas input { display: block; width: 100%; margin-top: 4px; padding: 5px 8px; box-sizing: border-box;
+                                   border: 1px solid var(--color-borde); border-radius: 6px; font-size: 12px; }
+    .filtro-columna-aviso { padding: 12px 14px; font-size: 12px; color: var(--color-texto-suave); }
     @media (max-width: 768px) {
         .consulta-ubicacion__input { width: 130px; font-size: 16px; }   /* 16px: iOS no hace zoom al enfocar */
     }
@@ -75,7 +83,7 @@
     <div class="tabla-barra-herramientas">
       <div class="buscador-contenedor">
         <svg viewBox="0 0 24 24" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input type="text" id="buscador-input" placeholder="Buscar por cliente, OF, descripción...">
+        <input type="text" id="buscador-input" placeholder="Buscar por OF, cliente, descripción, máquina...">
       </div>
 
       <div class="filtros-contenedor">
@@ -88,16 +96,12 @@
             <label style="display:block; font-size:12px; font-weight:bold; margin-bottom:5px;">Estado:</label>
             <select id="filtro-estado" class="control-entrada" onchange="window.recargarRegistros()" style="width:100%; padding:5px; font-size:12px;">
               <option value="">Todos los estados</option>
-              <option value="PENDIENTE">Pendiente</option>
-              <option value="EN_PROCESO">En Proceso</option>
-              <option value="EN_MAQUINA">En Máquina</option>
-              <option value="COMPLETADO">Completado</option>
-              <option value="REVISION">En Revisión</option>
-              <option value="REPETIR">Para Repetir</option>
-              <option value="EN_FABRICACION">En Fabricación (nuevo)</option>
-              <option value="PENDIENTE_K1">Pendiente de K1 (nuevo)</option>
-              <option value="APROBADO">Aprobado (nuevo)</option>
-              <option value="INACTIVO">Inactivo (nuevo)</option>
+              <option value="EN_FABRICACION">En fabricación</option>
+              <option value="PENDIENTE_K1">Pendiente de K1</option>
+              <option value="APROBADO">Aprobado</option>
+              <option value="EN_MAQUINA">En máquina</option>
+              <option value="REPETIR">Para repetir</option>
+              <option value="INACTIVO">Inactivo</option>
             </select>
           </div>
           <div style="margin-bottom:10px;">
@@ -158,148 +162,8 @@
     <div class="tabla-area-datos">
       <table class="tabla-registros" id="tabla-registros">
         <thead>
-          <tr>
-            <th data-col="of">OF <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="of" title="Filtrar OF">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-of" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="origen" title="Sistema anterior (OrdenFabricacion) o Nuevo (grabado creado en EIS)">Origen <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="origen" title="Filtrar Origen">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-origen" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="ref">OF Ref. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="ref" title="Filtrar OF Ref.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-ref" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="cliente">Cliente <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="cliente" title="Filtrar Cliente">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-cliente" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="desc">Descripción <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="desc" title="Filtrar Descripción">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-desc" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="estado">Estado <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="estado" title="Filtrar Estado">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-estado" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="fecha">Fecha Prog. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="fecha" title="Filtrar Fecha Prog.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-fecha" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="fecha_reg">Fecha Registro <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="fecha_reg" title="Filtrar Fecha Registro">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-fecha_reg" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="proceso">Proceso <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="proceso" title="Filtrar Proceso">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-proceso" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="maquina">Máquina <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="maquina" title="Filtrar Máquina">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-maquina" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="tipo">Tipo <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="tipo" title="Filtrar Tipo">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-tipo" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="ubicacion">Ubicación <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="ubicacion" title="Filtrar Ubicación">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-ubicacion" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="sobre">Sobre <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="sobre" title="Filtrar Sobre">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-sobre" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="cantidad">Cant. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="cantidad" title="Filtrar Cant.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-cantidad" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="horas">Horas <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="horas" title="Filtrar Horas">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-horas" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="responsables">Responsables <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="responsables" title="Filtrar Responsables">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-responsables" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="peso_i">P. Inicial (g) <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="peso_i" title="Filtrar P. Inicial">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-peso_i" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="peso_f">P. Final (g) <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="peso_f" title="Filtrar P. Final">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-peso_f" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="perdida">Pérdida <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="perdida" title="Filtrar Pérdida">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-perdida" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="temp">Temp. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="temp" title="Filtrar Temp.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-temp" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="rpm">RPM <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="rpm" title="Filtrar RPM">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-rpm" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="tiempo_t">Tiempo T. (min) <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="tiempo_t" title="Filtrar Tiempo T.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-tiempo_t" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="comp">Comp. <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg>
-              <button type="button" class="boton-filtro-columna" data-columna="comp" title="Filtrar Comp.">
-                <svg viewBox="0 0 24 24" stroke-width="2"><polygon points="4 4 20 4 14 12 14 19 10 21 10 12 4 4"/></svg>
-              </button>
-              <span id="indicador-filtro-comp" style="display:none; width:6px; height:6px; border-radius:50%; background:#f39c12; margin-left:1px; vertical-align:middle;"></span>
-            </th>
-            <th data-col="grabado_mod" title="Última modificación del grabado enlazado">Últ. modif. grabado <svg viewBox="0 0 24 24" stroke-width="2"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></th>
-            <th data-col="acciones">Acciones</th>
-          </tr>
+          <!-- Encabezados: los dibuja grabados_tabla.js desde COLUMNAS -->
+          <tr id="tabla-encabezado"></tr>
         </thead>
         <tbody id="tabla-cuerpo"></tbody>
       </table>
@@ -319,10 +183,6 @@
       <div class="filtro-columna-panel__lista" id="filtro-columna-lista"></div>
     </div>
   </div>
-
-<script>
-  window.USER_IS_ADMIN = {{ user.is_staff|yesno:"true,false" }};
-</script>
 
 <script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
 <script src="{% static_v 'js/componentes/etiqueta.js' %}"></script>

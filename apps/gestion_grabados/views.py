@@ -293,30 +293,6 @@ def _serializar_registros(queryset):
     return registros
 
 
-def _serializar_grabados_nuevos(grabados):
-    """Filas "Nuevo" de la Tabla de Consultas (grabados sin LegadoOrden), con las mismas
-    claves que las de OrdenFabricacion; lo que el grabado no tiene va vacío."""
-    vacias = ('ref', 'maquina', 'cantidad', 'horas', 'responsables', 'peso_i', 'peso_f',
-              'perdida', 'temp', 'rpm', 'tiempo_t', 'comp', 'foto_dano')
-    filas = []
-    for g in grabados:
-        modificado = selectors.formatear_fecha(g['actualizado_el'])
-        fila = dict.fromkeys(vacias)
-        fila.update({
-            'id': f"g{g['id']}",
-            'origen': selectors.ORIGEN_NUEVO,
-            'of': g['of_origen'], 'cliente': g['cliente'], 'desc': g['referencia'],
-            'tipo': g['tipo'], 'proceso': g['proceso'], 'estado': g['estado'],
-            'fecha': '—', 'fecha_reg': timezone.localtime(g['creado_el']).strftime('%d/%m/%Y'),
-            'ubicacion': g['ubicacion'], 'sobre': g['sobre'], 'usos_acumulados': g['usos_acumulados'],
-            'grabado': {'id': g['id'], 'of_origen': g['of_origen'], 'proceso': g['proceso'],
-                        'ubicacion': g['ubicacion'], 'estado': g['estado'], 'actualizado_el': modificado},
-            'enlace': None, 'motivo_sin_grabado': None, 'grabado_mod': modificado,
-        })
-        filas.append(fila)
-    return filas
-
-
 @login_required
 def api_obtener_registros(request):
     """Todas las filas (sin tope): la usan las Estadísticas (Histórico)."""
@@ -339,31 +315,27 @@ def api_obtener_registros(request):
 
 @login_required
 def api_consulta_registros(request):
-    """Tabla de Consultas: búsqueda (`q`) y filtros (`filtros`, JSON) sobre todo el
-    historial (OrdenFabricacion + grabados nuevos), las LIMITE_CONSULTA más recientes
-    por fecha de registro."""
+    """Tabla de Consultas: una fila por envío a máquina y una por grabado sin envíos
+    (solo tablas nuevas), con búsqueda (`q`) y filtros (`filtros`, JSON) sobre todo el
+    historial, las LIMITE_CONSULTA más recientes."""
     try:
         filtros = json.loads(request.GET.get('filtros') or '[]')
-        resultado = selectors.consulta_ordenes(request.GET.get('q', '').strip(), filtros)
+        resultado = selectors.consulta_registros(request.GET.get('q', '').strip(), filtros)
     except json.JSONDecodeError:
         return JsonResponse({'status': 'error', 'message': 'Filtros inválidos.'}, status=400)
     except selectors.FiltroConsultaInvalido as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
-    filas = {(selectors.ORIGEN_ANTERIOR, r['id']): r for r in _serializar_registros(resultado['ordenes'])}
-    filas.update({(selectors.ORIGEN_NUEVO, g['grabado']['id']): g
-                  for g in _serializar_grabados_nuevos(resultado['grabados'])})
-    return JsonResponse({'status': 'ok', 'total': resultado['total'], 'limite': resultado['limite'],
-                         'data': [filas[clave] for clave in resultado['secuencia']]})
+    return JsonResponse({'status': 'ok', **resultado})
 
 
 @login_required
 def api_consulta_valores(request):
     """Valores distintos de una columna (todo el historial) para su filtro."""
     try:
-        valores = selectors.valores_columna_consulta(request.GET.get('col', ''), request.GET.get('q', '').strip())
+        resultado = selectors.valores_columna_consulta(request.GET.get('col', ''), request.GET.get('q', '').strip())
     except selectors.FiltroConsultaInvalido as e:
         return JsonResponse({'status': 'error', 'message': str(e)}, status=400)
-    return JsonResponse({'status': 'ok', 'valores': valores})
+    return JsonResponse({'status': 'ok', **resultado})
 
 @login_required
 def grabado_estadisticas(request):
@@ -413,10 +385,10 @@ def api_estadisticas_detalladas(request):
         }
     })
 
-# Tarjetas de la Tabla de Consultas (sistema anterior + nuevo, ver selectors.kpis_consulta)
+# Tarjetas de la Tabla de Consultas (solo Grabado y EnvioMaquina, ver selectors.kpis_consulta)
 @login_required
 def api_dashboard_kpis(request):
-    return JsonResponse(selectors.kpis_consulta(timezone.now().date()))
+    return JsonResponse(selectors.kpis_consulta(timezone.localdate()))
 
 @login_required
 def api_historial_orden(request, of_numero):
@@ -449,20 +421,14 @@ def api_historial_orden(request, of_numero):
         'ref_id': ref_numero
     }, safe=False)
 
+MENSAJE_ELIMINAR_RETIRADO = ('Las órdenes del sistema anterior quedan como respaldo y ya no se '
+                             'eliminan desde la pantalla.')
+
+
+# RETIRADO: la Tabla de Consultas ya no muestra OrdenFabricacion; responde 410 sin tocar la base.
 @login_required
 def api_eliminar_registro(request):
-    if request.method == 'POST':
-        if not request.user.is_staff:
-            return JsonResponse({'status': 'error', 'message': 'No tiene permisos para eliminar.'}, status=403)
-        try:
-            data = json.loads(request.body)
-            of_num = data.get('of')
-            proceso = data.get('proceso')
-            OrdenFabricacion.objects.filter(of=of_num, proceso=proceso).delete()
-            return JsonResponse({'status': 'ok', 'message': 'Registro eliminado.'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-    return JsonResponse({'status': 'error', 'message': 'Método no permitido'}, status=405)
+    return JsonResponse({'status': 'error', 'message': MENSAJE_ELIMINAR_RETIRADO}, status=410)
 
 @login_required
 def sincronizar_plani(request):
