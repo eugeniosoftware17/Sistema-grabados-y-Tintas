@@ -2198,7 +2198,7 @@ class LimpiarTextoExcelTests(TestCase):
 class PermisosModuloGrabadosTests(BaseGrabados):
 
     PAGINAS = ('alta_grabado', 'k1_pendientes', 'inventario_grabados', 'plani_consulta',
-               'grabado_consulta', 'grabado_estadisticas', 'sobres')
+               'grabado_consulta', 'grabado_estadisticas', 'sobres', 'consultor_of')
 
     def rutas(self):
         """(nombre, url) de TODAS las rutas del módulo, con valores de relleno
@@ -3644,3 +3644,163 @@ class DisenadorEtiquetaAdminTests(BaseGrabados):
         self.assertFalse(modelo_admin.has_delete_permission(peticion))
         peticion = mock.Mock(user=staff)
         self.assertFalse(modelo_admin.has_module_permission(peticion))
+
+
+# ============================================================
+# CONSULTOR DE OF (solo lectura)
+# ============================================================
+
+RUTA_CONSULTAR_OF = 'apps.gestion_grabados.views_grabados.consultar_of_externa'
+
+
+def fila_api(of_stamping=None, of_embossing=None, acabat_stamping=None, acabat_embossing=None,
+             cliente='CLIENTE SA', referencia='ANILLA DORADA', sobre='S-10'):
+    """Misma forma que devuelve views.consultar_of_externa()."""
+    return {'Sobre_pelicula': sobre, 'OF_Stamping': of_stamping, 'OF_Embossing': of_embossing,
+            'Acabat_Stamping': acabat_stamping, 'Acabat_Embossing': acabat_embossing,
+            'G_Cliente': cliente, 'G_Referencia': referencia}
+
+
+class ConsultarOfExternaTests(SimpleTestCase):
+    """views.consultar_of_externa: distingue "no existe" (None) de "no responde" (excepción)."""
+
+    def test_devuelve_la_fila_por_columna(self):
+        from apps.gestion_grabados import views
+        fila = ('S-10', 22741.0, None, '1', None, 'CLIENTE SA', 'ANILLA')
+        with mock.patch.object(views, '_buscar_fila_db', return_value=fila) as buscar:
+            resultado = views.consultar_of_externa(22741)
+        buscar.assert_called_once_with(22741, views.COLUMNAS_INFO_EXTERNA)
+        self.assertEqual(resultado['OF_Stamping'], 22741.0)
+        self.assertEqual(resultado['G_Referencia'], 'ANILLA')
+
+    @override_settings(EXTERNA_2012_SOURCE='api')
+    def test_usa_la_api_segun_la_configuracion_y_none_si_no_existe(self):
+        from apps.gestion_grabados import views
+        with mock.patch.object(views, '_buscar_fila_api', return_value=None) as buscar:
+            self.assertIsNone(views.consultar_of_externa(1))
+        buscar.assert_called_once()
+
+    def test_si_el_origen_falla_lanza_error(self):
+        from apps.gestion_grabados import views
+        with mock.patch.object(views, '_buscar_fila_db', side_effect=OSError('timeout')):
+            with self.assertRaises(views.ErrorDatosExternos):
+                views.consultar_of_externa(22741)
+
+
+class ConsultorOfTests(BaseGrabados):
+
+    def consultar(self, of, fila=None, error=None):
+        self.client.force_login(self.operario)
+        kwargs = {'side_effect': error} if error else {'return_value': fila}
+        with mock.patch(RUTA_CONSULTAR_OF, **kwargs) as consulta:
+            respuesta = self.client.get(reverse('grabados:api_consultor_of'), {'of': of})
+        return respuesta, consulta
+
+    def proceso(self, datos, proceso):
+        return next(p for p in datos['procesos'] if p['proceso'] == proceso)
+
+    def test_pagina_y_enlace_en_el_menu(self):
+        self.client.force_login(self.operario)
+        respuesta = self.client.get(reverse('grabados:consultor_of'))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, 'consultor_of.html')
+        self.assertContains(respuesta, f'href="{reverse("grabados:consultor_of")}"')
+        self.assertContains(respuesta, 'Consultor de OF')
+
+    def test_of_vacia_o_invalida_da_400_sin_consultar_la_api(self):
+        for valor in ('', '   ', 'abc'):
+            with self.subTest(of=valor):
+                respuesta, consulta = self.consultar(valor)
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertEqual(respuesta.json()['message'], 'Ingresa un número de OF válido.')
+                consulta.assert_not_called()
+
+    def test_normaliza_la_of(self):
+        respuesta, consulta = self.consultar(' 22741.0 ', fila_api(of_stamping='22741'))
+        self.assertEqual(respuesta.status_code, 200)
+        consulta.assert_called_once_with(22741)
+        self.assertEqual(respuesta.json()['of'], '22741')
+
+    def test_api_caida_da_503_con_mensaje(self):
+        from apps.gestion_grabados.views import ErrorDatosExternos
+        respuesta, _ = self.consultar('22741', error=ErrorDatosExternos('timeout'))
+        self.assertEqual(respuesta.status_code, 503)
+        self.assertEqual(respuesta.json()['status'], 'error')
+        self.assertIn('no responde', respuesta.json()['message'])
+
+    def test_of_que_la_api_no_encuentra(self):
+        respuesta, _ = self.consultar('99999', None)
+        datos = respuesta.json()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(datos['encontrado'])
+        self.assertEqual(datos['datos'], {'cliente': None, 'descripcion': None, 'sobre': None,
+                                          'of_referencia': None})
+        for p in datos['procesos']:
+            self.assertIsNone(p['grabado'])
+            self.assertEqual(p['of_origen'], '99999')
+            self.assertFalse(p['sin_proceso_en_api'])
+
+    def test_of_que_la_api_no_encuentra_igual_muestra_su_grabado(self):
+        grabado = self.registrar(of='22741')['grabado']
+        datos = self.consultar('22741', None)[0].json()
+        self.assertEqual(self.proceso(datos, 'STAMPING')['grabado']['id'], grabado.id)
+
+    def test_datos_tal_como_vienen_y_vacios_en_none(self):
+        fila = fila_api(of_stamping=22741.0, acabat_stamping='1', cliente='  CLIENTE   SA ', referencia='',
+                        sobre='—')
+        datos = self.consultar('22741', fila)[0].json()
+        self.assertTrue(datos['encontrado'])
+        self.assertEqual(datos['datos'], {'cliente': 'CLIENTE SA', 'descripcion': None, 'sobre': None,
+                                          'of_referencia': '22741'})
+        stamping, embossing = self.proceso(datos, 'STAMPING'), self.proceso(datos, 'EMBOSSING')
+        self.assertEqual((stamping['of_referencia'], stamping['acabado'], stamping['terminada']), ('22741', '1', True))
+        self.assertEqual((embossing['of_referencia'], embossing['acabado'], embossing['terminada']), (None, None, False))
+        self.assertTrue(embossing['sin_proceso_en_api'])
+
+    def test_grabado_existente_con_estado_y_ubicacion(self):
+        grabado = self.registrar(of='22741')['grabado']
+        Grabado.objects.filter(pk=grabado.pk).update(ubicacion='GBB-2-1')
+        grabado.refresh_from_db()
+        datos = self.consultar('22741', fila_api(of_stamping='22741'))[0].json()
+        stamping = self.proceso(datos, 'STAMPING')
+        self.assertEqual(stamping['grabado'], {
+            'id': grabado.id, 'of_origen': '22741', 'estado': 'PENDIENTE_K1',
+            'estado_display': grabado.get_estado_display(), 'tipo': 'K1',
+            'tipo_display': grabado.get_tipo_display(), 'ubicacion': 'GBB-2-1',
+        })
+        self.assertFalse(stamping['usa_grabado_de_otra'])
+        self.assertIsNone(self.proceso(datos, 'EMBOSSING')['grabado'])
+
+    def test_of_que_usa_el_grabado_de_su_referencia(self):
+        grabado = self.registrar(of='22741')['grabado']
+        datos = self.consultar('25000', fila_api(of_stamping='22741'))[0].json()
+        stamping = self.proceso(datos, 'STAMPING')
+        self.assertEqual(stamping['of_origen'], '22741')
+        self.assertTrue(stamping['usa_grabado_de_otra'])
+        self.assertEqual(stamping['grabado']['id'], grabado.id)
+
+    def test_dos_procesos_con_referencias_distintas_sin_referencia_general(self):
+        datos = self.consultar('25000', fila_api(of_stamping='22741', of_embossing='22800'))[0].json()
+        self.assertIsNone(datos['datos']['of_referencia'])
+        self.assertEqual(self.proceso(datos, 'EMBOSSING')['of_origen'], '22800')
+
+    def test_no_escribe_nada(self):
+        self.registrar(of='22741')
+        modelos = (Grabado, FabricacionGrabado, PruebaK1, Sobre, HistorialUbicacion, EnvioMaquina, EstadoBano)
+        antes = [m.objects.count() for m in modelos]
+        self.consultar('22741', fila_api(of_stamping='22741'))
+        self.consultar('30000', None)
+        self.assertEqual([m.objects.count() for m in modelos], antes)
+
+    def test_solo_get(self):
+        self.client.force_login(self.operario)
+        with mock.patch(RUTA_CONSULTAR_OF) as consulta:
+            respuesta = self.client.post(reverse('grabados:api_consultor_of'), {'of': '22741'})
+        self.assertEqual(respuesta.status_code, 405)
+        consulta.assert_not_called()
+
+    def test_js_enlaza_crear_grabado_y_el_panel(self):
+        js = (RUTA_JS / 'consultor_of.js').read_text(encoding='utf-8')
+        self.assertIn('/grabados/alta/?', js)
+        self.assertIn('Sin grabado en EIS', js)
+        self.assertIn('PanelGrabado.abrir', js)

@@ -209,6 +209,24 @@ def buscar_datos_externos(of_numero, proceso):
     return dict(VACIO_INFO_EXTERNA)
 
 
+class ErrorDatosExternos(Exception):
+    """La API de FileMaker (o externa_2012) no respondió."""
+
+
+def consultar_of_externa(of_int):
+    """Fila cruda de una OF ({columna de COLUMNAS_INFO_EXTERNA: valor}) o None si no existe.
+    A diferencia de buscar_datos_externos, NO se traga los errores: si el origen no
+    responde lanza ErrorDatosExternos (el Consultor de OF distingue "no existe" de "caída")."""
+    try:
+        if getattr(settings, 'EXTERNA_2012_SOURCE', 'db') == 'api':
+            row = _buscar_fila_api(of_int, COLUMNAS_INFO_EXTERNA)
+        else:
+            row = _buscar_fila_db(of_int, COLUMNAS_INFO_EXTERNA)
+    except Exception as e:
+        raise ErrorDatosExternos(str(e)) from e
+    return dict(zip(COLUMNAS_INFO_EXTERNA, row)) if row else None
+
+
 def buscar_datos_externos_batch(of_numeros, proceso):
     """Versión en lote de buscar_datos_externos(): una sola consulta (SQL o HTTP) para
     todas las OF de `of_numeros`, en vez de una por OF. Pensada para sincronizar_plani(),

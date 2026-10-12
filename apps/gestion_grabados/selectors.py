@@ -927,3 +927,84 @@ def datos_etiqueta_prueba():
     return _datos_etiqueta(of_origen='22741', proceso='STAMPING', cliente='CLIENTE DE EJEMPLO, S.A.',
                            descripcion='ANILLA DORADA 52 MM - EDICIÓN ESPECIAL CON RELIEVE',
                            ubicacion='GBB-2-1', fecha=timezone.now())
+
+
+# ============================================================
+# CONSULTOR DE OF (solo lectura)
+# ============================================================
+
+# Mismos valores que views._procesar_fila_externa toma como "acabado".
+_ACABADO_SI = ('si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y')
+
+
+def _texto_externo(valor):
+    """Texto del sistema externo sin espacios sobrantes; None si viene vacío (en pantalla, "—")."""
+    texto = ' '.join(str(valor).split()) if valor is not None else ''
+    return texto if texto not in ('', '—') else None
+
+
+def _of_externa(valor, normalizar_of):
+    """Una OF de la API como texto sin ".0" (22741.0 -> "22741"); si no es numérica, tal cual."""
+    texto = _texto_externo(valor)
+    if texto is None:
+        return None
+    of_int = normalizar_of(texto)
+    return str(of_int) if of_int is not None else texto
+
+
+def consultor_of(of, fila, normalizar_of):
+    """
+    Lo que muestra el Consultor de OF: los datos de la API para la OF (`fila` es
+    views.consultar_of_externa, o None si la API no la tiene) y, por proceso, su
+    OF de referencia, su acabado y el grabado de EIS que le toca. El grabado se
+    resuelve como en el PLANI: con la OF de referencia del proceso (vacía -> la
+    propia OF; sin fila en la API también la propia OF). No escribe nada.
+    """
+    fila = fila or {}
+    # Forma mínima de buscar_datos_externos que necesitan of_origen_externa / proceso_ausente_en_externo.
+    info = {'encontrado_ext': bool(fila),
+            'of_stamping_ext': fila.get('OF_Stamping'), 'of_embossing_ext': fila.get('OF_Embossing')}
+    campos = {'STAMPING': ('OF_Stamping', 'Acabat_Stamping'), 'EMBOSSING': ('OF_Embossing', 'Acabat_Embossing')}
+
+    origenes = {p: of_origen_externa(info, p, normalizar_of) or of for p in PROCESOS_VALIDOS}
+    grabados = {(g.of_origen, g.proceso): g
+                for g in Grabado.objects.filter(of_origen__in=set(origenes.values()))}
+
+    procesos = []
+    for proceso in PROCESOS_VALIDOS:
+        campo_of, campo_acabado = campos[proceso]
+        acabado = _texto_externo(fila.get(campo_acabado))
+        of_origen = origenes[proceso]
+        grabado = grabados.get((of_origen, proceso))
+        procesos.append({
+            'proceso': proceso,
+            'of_referencia': _of_externa(fila.get(campo_of), normalizar_of),
+            'acabado': acabado,
+            'terminada': acabado is not None and acabado.lower() in _ACABADO_SI,
+            'of_origen': of_origen,
+            'usa_grabado_de_otra': of_origen != of,
+            'sin_proceso_en_api': proceso_ausente_en_externo(info, proceso, normalizar_of),
+            'grabado': None if grabado is None else {
+                'id': grabado.id,
+                'of_origen': grabado.of_origen,
+                'estado': grabado.estado,
+                'estado_display': grabado.get_estado_display(),
+                'tipo': grabado.tipo,
+                'tipo_display': grabado.get_tipo_display(),
+                'ubicacion': grabado.ubicacion or None,
+            },
+        })
+
+    # OF de referencia general: la que trae la API si es una sola (un proceso, o los dos iguales).
+    con_referencia = list({p['of_referencia'] for p in procesos if p['of_referencia']})
+    return {
+        'of': of,
+        'encontrado': bool(fila),
+        'datos': {
+            'cliente': _texto_externo(fila.get('G_Cliente')),
+            'descripcion': _texto_externo(fila.get('G_Referencia')),
+            'sobre': _texto_externo(fila.get('Sobre_pelicula')),
+            'of_referencia': con_referencia[0] if len(con_referencia) == 1 else None,
+        },
+        'procesos': procesos,
+    }

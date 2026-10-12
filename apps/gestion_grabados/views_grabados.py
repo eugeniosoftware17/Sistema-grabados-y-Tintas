@@ -18,7 +18,7 @@ from django.shortcuts import render
 from . import selectors
 from .models import Grabado, Maquina, PruebaK1
 from .services import grabados as servicio
-from .views import _normalizar_of, buscar_datos_externos
+from .views import ErrorDatosExternos, _normalizar_of, buscar_datos_externos, consultar_of_externa
 
 def _error(mensaje, status=400):
     return JsonResponse({'status': 'error', 'message': mensaje}, status=status)
@@ -133,6 +133,33 @@ def api_alta_registrar(request):
     if resultado['bano']:
         respuesta['bano'] = resultado['bano']
     return JsonResponse(respuesta)
+
+
+# ============================================================
+# CONSULTOR DE OF (solo lectura)
+# ============================================================
+
+@login_required
+def consultor_of(request):
+    return render(request, 'consultor_of.html')
+
+
+@login_required
+def api_consultor_of(request):
+    """Datos de la API para una OF y, por proceso, el grabado de EIS que le toca.
+    ?of=<número>. Solo lectura. 400 si la OF no es válida; 503 si la API no responde;
+    si la API no tiene la OF responde 200 con encontrado=False (igual dice qué hay en EIS)."""
+    if request.method != 'GET':
+        return _error('Método no permitido', status=405)
+    of = _of_normalizada(request.GET.get('of', '').strip())
+    if not of:
+        return _error('Ingresa un número de OF válido.')
+    try:
+        fila = consultar_of_externa(int(of))
+    except ErrorDatosExternos:
+        return _error('No se pudo consultar la API de FileMaker: no responde. '
+                      'Intenta de nuevo en unos minutos.', status=503)
+    return JsonResponse({'status': 'ok', **selectors.consultor_of(of, fila, _normalizar_of)})
 
 
 # ============================================================

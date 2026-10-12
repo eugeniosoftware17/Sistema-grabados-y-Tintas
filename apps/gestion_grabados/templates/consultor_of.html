@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% load static estaticos %}
+
+{% block title %}Consultor de OF | CIGAR RINGS{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="{% static_v 'css/grabados_tabla.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/grabados_paginas.css' %}">
+<link rel="stylesheet" href="{% static_v 'css/componentes/panel_grabado.css' %}">
+<style>
+    /* Estilos propios del Consultor de OF (ver views_grabados.consultor_of) */
+    .cof-busqueda { display: flex; gap: 10px; align-items: flex-end; }
+    .cof-busqueda .campo-grupo { flex: 1 1 auto; margin-bottom: 0; }
+    .cof-busqueda .boton { white-space: nowrap; }
+    #cof-aviso { margin-top: 16px; }
+    .cof-datos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; margin: 0; }
+    .cof-datos dt { font-size: 12px; font-weight: 600; color: #666; margin-bottom: 4px; }
+    .cof-datos dd { margin: 0; font-size: 14px; color: #222; overflow-wrap: anywhere; }
+    .cof-grabado { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .cof-grabado small { color: #666; }
+    .cof-grabado .boton { padding: 5px 10px; font-size: 11px; }
+    .boton--detalle { background: #e8f5e9; color: #1b5e20; border: 1px solid #c8e6c9; text-decoration: none; }
+    .cof-nota { display: block; color: #8a6100; font-size: 12px; margin-top: 4px; }
+
+    @media (max-width: 900px) {
+        .cof-datos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 600px) {
+        .cof-busqueda { flex-direction: column; align-items: stretch; }
+        .cof-datos { grid-template-columns: minmax(0, 1fr); }
+        /* Celular: cada fila es una tarjeta (data-label de cada td, ver grabados_tabla.css). */
+        .tabla-registros tbody td { gap: 10px; text-align: right; min-width: 0; }
+        .tabla-registros tbody td.cof-celda-grabado { display: block; text-align: left; }
+        .tabla-registros tbody td.cof-celda-grabado::before { display: block; margin-bottom: 6px; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="alta-pagina">
+
+  <header class="pagina-encabezado">
+    <div>
+      <h1 class="pagina-titulo">
+        <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
+        </svg>
+        Consultor de OF
+      </h1>
+      <p class="pagina-descripcion">Consulta lo que la API tiene de una OF y si ya existe su grabado en EIS. Solo lectura.</p>
+    </div>
+  </header>
+
+  <div class="dashboard-card">
+    <div class="dashboard-cuerpo">
+      <form class="cof-busqueda" id="cof-form" autocomplete="off">
+        <div class="campo-grupo">
+          <label for="cof-of">Número de OF:</label>
+          <input type="text" id="cof-of" class="control-entrada" placeholder="Ej: 22741" inputmode="numeric">
+        </div>
+        <button type="submit" class="boton boton--primario" id="cof-btn">Consultar</button>
+      </form>
+      <div id="cof-aviso" class="aviso" style="display:none;" role="status"></div>
+    </div>
+  </div>
+
+  <div id="cof-resultado" style="display:none;">
+    <div class="dashboard-card" style="margin-top: 16px;">
+      <div class="dashboard-cabecera">
+        <h3>Datos de la OF <span id="cof-titulo-of"></span></h3>
+        <p>Tal como vienen de la API</p>
+      </div>
+      <div class="dashboard-cuerpo">
+        <dl class="cof-datos">
+          <div><dt>Cliente</dt><dd id="cof-cliente"></dd></div>
+          <div><dt>Descripción</dt><dd id="cof-descripcion"></dd></div>
+          <div><dt>Sobre</dt><dd id="cof-sobre"></dd></div>
+          <div><dt>OF de referencia</dt><dd id="cof-of-referencia"></dd></div>
+        </dl>
+      </div>
+    </div>
+
+    <div class="tabla-contenedor" style="margin-top: 16px;">
+      <div class="tabla-area-datos">
+        <table class="tabla-registros">
+          <thead>
+            <tr>
+              <th>Proceso</th>
+              <th>OF de referencia</th>
+              <th>Acabado</th>
+              <th>Grabado en EIS</th>
+            </tr>
+          </thead>
+          <tbody id="cof-procesos"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
+<script src="{% static_v 'js/consultor_of.js' %}"></script>
+{% endblock %}

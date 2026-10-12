@@ -121,6 +121,11 @@
             >Crear Grabado</a
           >
           <a
+            href="{% url 'grabados:consultor_of' %}"
+            class="sb-subitem {% if view_name == 'grabados:consultor_of' %}sb-subitem--active{% endif %}"
+            >Consultor de OF</a
+          >
+          <a
             href="{% url 'grabados:inventario_grabados' %}"
             class="sb-subitem {% if view_name == 'grabados:inventario_grabados' %}sb-subitem--active{% endif %}"
             >Inventario de Grabados</a
