@@ -21,6 +21,31 @@ from .services.grabados import (
 )
 
 
+# ============================================================
+# ACABADO DE FILEMAKER (Acabat Stamping / Acabat Embossing)
+# ============================================================
+
+# En FileMaker, Acabat es una casilla: marcada, la API devuelve "si" (el proceso ya
+# pasó); vacía, devuelve null (no ha pasado). Se aceptan también x/X y los valores de antes.
+ACABADO_SI = ('x', 'si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y')
+ACABADO_NO = ('no', 'n', 'false', '0', '0.0')
+
+
+def valor_acabado(valor, encontrado=False):
+    """Acabat de FileMaker -> '1' terminado / '0' no terminado / None sin dato.
+    encontrado=True: la OF sí tiene fila en FileMaker, así que la casilla vacía
+    (null de la API -> None, '' o solo espacios) es '0'. Sin fila (OF no encontrada, API caída) o
+    con un valor desconocido no vacío -> None: el PLANI nunca bloquea sin dato."""
+    texto = str(valor).strip().lower() if valor is not None else ''
+    if texto in ACABADO_SI:
+        return '1'
+    if texto in ACABADO_NO:
+        return '0'
+    if texto == '' and encontrado:
+        return '0'
+    return None
+
+
 def formatear_fecha(valor):
     """dd/mm/aaaa hh:mm en la zona horaria de settings.TIME_ZONE (o None)."""
     if valor is None:
@@ -514,8 +539,9 @@ def _estado_fila_plani(fila, clave, grabados, abierto_por_of, abierto_por_grabad
         return {'accion': PLANI_SIN_PROCESO, 'grabado': None,
                 'mensaje': f'El sistema externo no tiene {proceso} para esta OF.'}
 
-    # Envío abierto de esta OF. acabado_ext (views.valor_acabado): '1' terminada -> Recoger;
-    # '0' FileMaker dice que no terminó -> sin botón; None sin dato -> Recoger (nunca bloquea).
+    # Envío abierto de esta OF. acabado_ext (valor_acabado): '1' casilla marcada ("si") -> Recoger;
+    # '0' OF encontrada con la casilla vacía (null) -> sin botón; None (OF no encontrada, API caída
+    # o valor desconocido) -> Recoger (nunca bloquea).
     propio = abierto_por_of.get((of, proceso))
     if propio is not None:
         acabado = fila.get('acabado_ext')
@@ -937,10 +963,6 @@ def datos_etiqueta_prueba():
 # CONSULTOR DE OF (solo lectura)
 # ============================================================
 
-# Mismos valores que views.ACABADO_SI (views.valor_acabado) toma como "acabado".
-_ACABADO_SI = ('si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y')
-
-
 def _texto_externo(valor):
     """Texto del sistema externo sin espacios sobrantes; None si viene vacío (en pantalla, "—")."""
     texto = ' '.join(str(valor).split()) if valor is not None else ''
@@ -984,7 +1006,7 @@ def consultor_of(of, fila, normalizar_of):
             'proceso': proceso,
             'of_referencia': _of_externa(fila.get(campo_of), normalizar_of),
             'acabado': acabado,
-            'terminada': acabado is not None and acabado.lower() in _ACABADO_SI,
+            'terminada': valor_acabado(fila.get(campo_acabado), encontrado=bool(fila)) == '1',
             'of_origen': of_origen,
             'usa_grabado_de_otra': of_origen != of,
             'sin_proceso_en_api': proceso_ausente_en_externo(info, proceso, normalizar_of),

@@ -41,21 +41,14 @@ COLUMNAS_INFO_EXTERNA = [
     'Acabat_Stamping', 'Acabat_Embossing', 'G_Cliente', 'G_Referencia',
 ]
 
-# Acabat Stamping / Acabat Embossing de FileMaker -> acabado_ext:
-#   '1'  terminado; '0' no terminado (solo un "no" explícito);
-#   None sin dato (vacío, valor desconocido, OF no encontrada o API caída).
-# El PLANI solo oculta "Recoger" con '0': sin dato no bloquea a nadie.
-ACABADO_SI = ('si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y')
-ACABADO_NO = ('no', 'n', 'false', '0', '0.0')
-
-
-def valor_acabado(valor):
-    texto = str(valor).strip().lower() if valor is not None else ''
-    if texto in ACABADO_SI:
-        return '1'
-    if texto in ACABADO_NO:
-        return '0'
-    return None
+# Acabat Stamping / Acabat Embossing de FileMaker -> acabado_ext (regla en selectors.valor_acabado):
+#   '1' casilla marcada (la API devuelve "si"); '0' OF encontrada con la casilla vacía
+#   (la API devuelve null) o un "no" explícito;
+#   None OF no encontrada, API caída o valor desconocido (VACIO_INFO_EXTERNA).
+# El PLANI solo oculta "Recoger" con '0'.
+ACABADO_SI = selectors.ACABADO_SI
+ACABADO_NO = selectors.ACABADO_NO
+valor_acabado = selectors.valor_acabado
 
 
 VACIO_INFO_EXTERNA = {
@@ -94,7 +87,9 @@ def _procesar_fila_externa(row, proceso):
     el resto de la app (mismas claves que antes devolvía buscar_datos_externos)."""
     sobre, of_stamping, of_embossing, acabat_stamping, acabat_embossing, cliente, referencia = row
 
-    val_acabado = valor_acabado(acabat_stamping if proceso == 'STAMPING' else acabat_embossing)
+    # La fila existe en FileMaker: casilla vacía (null) = el proceso no ha pasado ('0').
+    val_acabado = valor_acabado(acabat_stamping if proceso == 'STAMPING' else acabat_embossing,
+                                encontrado=True)
 
     def tiene_valor(v):
         return v is not None and str(v).strip() not in ('', '—')

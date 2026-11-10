@@ -1963,6 +1963,24 @@ class PlaniResolucionTests(BasePlani):
             self.assertEqual(estado['accion'], selectors.PLANI_RECOGER)
             self.assertFalse(estado['terminada_en_planta'])
 
+    def test_envio_abierto_con_casilla_vacia_en_filemaker_no_muestra_recoger(self):
+        from apps.gestion_grabados import views
+        self.mandar(self.aprobado())
+        fila_fm = ('S-10', '22741', None, None, None, 'CLIENTE SA', 'ANILLA')   # Acabat null
+        acabado = views._procesar_fila_externa(fila_fm, 'STAMPING')['acabado_ext']
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext=acabado))
+        self.assertEqual(estado['accion'], selectors.PLANI_EN_PROCESO)
+        self.assertFalse(estado['terminada_en_planta'])
+
+    def test_envio_abierto_con_casilla_marcada_muestra_recoger(self):
+        from apps.gestion_grabados import views
+        self.mandar(self.aprobado())
+        fila_fm = ('S-10', '22741', None, 'si', None, 'CLIENTE SA', 'ANILLA')
+        acabado = views._procesar_fila_externa(fila_fm, 'STAMPING')['acabado_ext']
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext=acabado))
+        self.assertEqual(estado['accion'], selectors.PLANI_RECOGER)
+        self.assertTrue(estado['terminada_en_planta'])
+
     def test_acabado_sin_envio_no_cambia_la_accion(self):
         self.aprobado()
         for acabado in ('1', '0', None):
@@ -3417,14 +3435,69 @@ def png_de_prueba(ancho=20, alto=10):
 
 class ValorAcabadoTests(SimpleTestCase):
 
-    def test_si_no_y_sin_dato(self):
-        for valor in ('1', 1, 1.0, 'Sí', ' OK ', True):
+    def test_si_no_y_sin_dato_sin_fila(self):
+        for valor in ('si', 'Si', ' SI ', 'x', 'X', '1', 1, 1.0, 'Sí', ' OK ', True):
             self.assertEqual(valor_acabado(valor), '1', valor)
         for valor in ('0', 0, 0.0, 'No', 'false'):
             self.assertEqual(valor_acabado(valor), '0', valor)
         for valor in (None, '', '  ', '—', 'pendiente'):
             self.assertIsNone(valor_acabado(valor), valor)
         self.assertIsNone(VACIO_INFO_EXTERNA['acabado_ext'])   # API caída / OF no encontrada
+
+    def test_casilla_vacia_con_of_encontrada_es_no_terminada(self):
+        for valor in (None, '', '   '):
+            self.assertEqual(valor_acabado(valor, encontrado=True), '0', repr(valor))
+        for valor in ('si', 'Si'):
+            self.assertEqual(valor_acabado(valor, encontrado=True), '1', valor)
+        # Valor desconocido no vacío: sin dato, aunque la OF exista (no bloquea a nadie).
+        for valor in ('pendiente', '—'):
+            self.assertIsNone(valor_acabado(valor, encontrado=True), valor)
+
+
+class AcabadoDatosExternosTests(SimpleTestCase):
+    """acabado_ext de punta a punta: _procesar_fila_externa y la búsqueda en lote/individual."""
+
+    @staticmethod
+    def fila(acabat_stamping=None, acabat_embossing=None):
+        # Orden de COLUMNAS_INFO_EXTERNA.
+        return ('S-10', 22741.0, None, acabat_stamping, acabat_embossing, 'CLIENTE SA', 'ANILLA')
+
+    def test_of_encontrada_con_casilla_vacia_da_0(self):
+        from apps.gestion_grabados import views
+        for vacio in (None, '', '  '):
+            info = views._procesar_fila_externa(self.fila(acabat_stamping=vacio), 'STAMPING')
+            self.assertEqual(info['acabado_ext'], '0', repr(vacio))
+
+    def test_casilla_marcada_da_1_segun_el_proceso(self):
+        from apps.gestion_grabados import views
+        for marca in ('si', 'Si'):
+            fila = self.fila(acabat_stamping=marca)
+            self.assertEqual(views._procesar_fila_externa(fila, 'STAMPING')['acabado_ext'], '1')
+            self.assertEqual(views._procesar_fila_externa(fila, 'EMBOSSING')['acabado_ext'], '0')
+
+    def test_valor_desconocido_da_none(self):
+        from apps.gestion_grabados import views
+        info = views._procesar_fila_externa(self.fila(acabat_stamping='pendiente'), 'STAMPING')
+        self.assertIsNone(info['acabado_ext'])
+
+    def test_lote_of_no_encontrada_o_api_caida_da_none(self):
+        from apps.gestion_grabados import views
+        with mock.patch.object(views, '_buscar_filas_db_batch', return_value={22741: self.fila()}):
+            resultado = views.buscar_datos_externos_batch(['22741', '22742'], 'STAMPING')
+        self.assertEqual(resultado[22741]['acabado_ext'], '0')     # encontrada, casilla vacía
+        self.assertIsNone(resultado[22742]['acabado_ext'])         # no encontrada
+        with mock.patch.object(views, '_buscar_filas_db_batch', side_effect=OSError('timeout')):
+            resultado = views.buscar_datos_externos_batch(['22741'], 'STAMPING')
+        self.assertIsNone(resultado[22741]['acabado_ext'])         # API caída
+
+    def test_individual_of_no_encontrada_o_api_caida_da_none(self):
+        from apps.gestion_grabados import views
+        with mock.patch.object(views, '_buscar_fila_db', return_value=None):
+            self.assertIsNone(views.buscar_datos_externos('22741', 'STAMPING')['acabado_ext'])
+        with mock.patch.object(views, '_buscar_fila_db', side_effect=OSError('timeout')):
+            self.assertIsNone(views.buscar_datos_externos('22741', 'STAMPING')['acabado_ext'])
+        with mock.patch.object(views, '_buscar_fila_db', return_value=self.fila()):
+            self.assertEqual(views.buscar_datos_externos('22741', 'STAMPING')['acabado_ext'], '0')
 
 
 class Codigo128Tests(SimpleTestCase):
@@ -3813,6 +3886,15 @@ class ConsultorOfTests(BaseGrabados):
         self.assertEqual((stamping['of_referencia'], stamping['acabado'], stamping['terminada']), ('22741', '1', True))
         self.assertEqual((embossing['of_referencia'], embossing['acabado'], embossing['terminada']), (None, None, False))
         self.assertTrue(embossing['sin_proceso_en_api'])
+
+    def test_casilla_marcada_con_si_es_terminada_y_null_no(self):
+        for marca in ('si', 'Si'):
+            with self.subTest(marca=marca):
+                fila = fila_api(of_stamping='22741', acabat_stamping=marca, acabat_embossing=None)
+                datos = self.consultar('22741', fila)[0].json()
+                stamping, embossing = self.proceso(datos, 'STAMPING'), self.proceso(datos, 'EMBOSSING')
+                self.assertEqual((stamping['acabado'], stamping['terminada']), (marca, True))
+                self.assertEqual((embossing['acabado'], embossing['terminada']), (None, False))
 
     def test_grabado_existente_con_estado_y_ubicacion(self):
         grabado = self.registrar(of='22741')['grabado']
