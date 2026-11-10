@@ -19,6 +19,8 @@
 
     const $ = (id) => document.getElementById(id);
     const MAQUINAS_ACTIVAS = new Set(JSON.parse($('plani-maquinas-activas').textContent || '[]'));
+    // Staff: ve "Recoger igualmente" cuando FileMaker dice que la OF no terminó (EN_PROCESO).
+    const ES_STAFF = JSON.parse($('plani-es-staff').textContent || 'false') === true;
     const LARGO_MINIMO_COMENTARIO = 5;
 
     // ---------------------------------------------------------- utilidades
@@ -229,6 +231,12 @@
                         : { icono: 'reloj', texto: conGrabadoDeOtra(e.mensaje, g) },
                     accion: { codigo: 'recoger', texto: 'Recoger', estilo: 'principal plani-accion--recoger' },
                 });
+            case 'EN_PROCESO':   // FileMaker dice que la OF no ha terminado: sin Recoger (staff: "Recoger igualmente")
+                return tarjeta({
+                    estado: ['EN_MAQUINA', 'En máquina'], grabado: g,
+                    nota: { icono: 'reloj', texto: conGrabadoDeOtra(e.mensaje, g) },
+                    accion: ES_STAFF ? { codigo: 'recoger', texto: 'Recoger igualmente', estilo: 'contorno' } : null,
+                });
             case 'EN_MAQUINA_OTRA':
                 return tarjeta({ estado: ['EN_MAQUINA', 'En máquina'], grabado: g,
                                  nota: { icono: 'reloj', texto: e.mensaje } });   // ya nombra la OF que lo tiene
@@ -295,7 +303,7 @@
         const e = fila.grabado || {};
         if (e.accion === 'SIN_PROCESO') return 'Sin datos del proceso';
         if (e.accion === 'DAR_DE_ALTA') return 'Sin grabado';
-        if (e.accion === 'RECOGER' || e.accion === 'EN_MAQUINA_OTRA') return 'En máquina';
+        if (['RECOGER', 'EN_PROCESO', 'EN_MAQUINA_OTRA'].includes(e.accion)) return 'En máquina';
         return e.grabado ? e.grabado.estado_display : '';
     }
 

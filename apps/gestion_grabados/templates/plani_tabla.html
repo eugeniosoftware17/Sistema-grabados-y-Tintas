@@ -285,6 +285,7 @@
 </div>
 
 {{ maquinas_activas|json_script:"plani-maquinas-activas" }}
+{{ user.is_staff|json_script:"plani-es-staff" }}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="{% static_v 'js/componentes/panel_grabado.js' %}"></script>
 <script src="{% static_v 'js/componentes/filtro_columna.js' %}"></script>

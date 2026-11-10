@@ -446,7 +446,8 @@ PLANI_DAR_DE_ALTA = 'DAR_DE_ALTA'          # no hay grabado registrado
 PLANI_SIN_ACCION = 'SIN_ACCION'            # en fabricación / pendiente de K1
 PLANI_MANDAR = 'MANDAR'                    # aprobado y libre
 PLANI_MANDAR_OTRA_VEZ = 'MANDAR_OTRA_VEZ'  # aprobado y esta OF ya se tiró (envío cerrado OK)
-PLANI_RECOGER = 'RECOGER'                  # en máquina con un envío de esta OF
+PLANI_RECOGER = 'RECOGER'                  # en máquina con un envío de esta OF; FileMaker: terminada o sin dato
+PLANI_EN_PROCESO = 'EN_PROCESO'            # en máquina con un envío de esta OF; FileMaker: no terminada (sin botón)
 PLANI_EN_MAQUINA_OTRA = 'EN_MAQUINA_OTRA'  # en máquina con un envío de otra OF
 PLANI_REFABRICAR = 'REFABRICAR'            # marcado para REPETIR
 PLANI_INACTIVO = 'INACTIVO'                # desactivado: no se usa hasta que se reactive
@@ -513,14 +514,17 @@ def _estado_fila_plani(fila, clave, grabados, abierto_por_of, abierto_por_grabad
         return {'accion': PLANI_SIN_PROCESO, 'grabado': None,
                 'mensaje': f'El sistema externo no tiene {proceso} para esta OF.'}
 
+    # Envío abierto de esta OF. acabado_ext (views.valor_acabado): '1' terminada -> Recoger;
+    # '0' FileMaker dice que no terminó -> sin botón; None sin dato -> Recoger (nunca bloquea).
     propio = abierto_por_of.get((of, proceso))
     if propio is not None:
+        acabado = fila.get('acabado_ext')
         return {
-            'accion': PLANI_RECOGER,
+            'accion': PLANI_EN_PROCESO if acabado == '0' else PLANI_RECOGER,
             'grabado': _resumen_grabado_plani(propio.grabado, of),
             'envio': {'id': propio.id, 'of': propio.of, 'maquina': propio.maquina.nombre,
                       'enviado_el': formatear_fecha(propio.enviado_el)},
-            'terminada_en_planta': fila.get('acabado_ext') == '1',
+            'terminada_en_planta': acabado == '1',
             'mensaje': f'En máquina ({propio.maquina.nombre}) desde el {formatear_fecha(propio.enviado_el)}.',
         }
 
@@ -933,7 +937,7 @@ def datos_etiqueta_prueba():
 # CONSULTOR DE OF (solo lectura)
 # ============================================================
 
-# Mismos valores que views._procesar_fila_externa toma como "acabado".
+# Mismos valores que views.ACABADO_SI (views.valor_acabado) toma como "acabado".
 _ACABADO_SI = ('si', 'sí', 'true', '1', '1.0', 'ok', 's', 'y')
 
 

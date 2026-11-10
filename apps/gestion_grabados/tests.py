@@ -36,7 +36,7 @@ from apps.gestion_grabados.models import (
 from apps.gestion_grabados.services import grabados as servicio
 from apps.gestion_grabados.services import etiquetas as servicio_etiquetas
 from apps.gestion_grabados.services import sobres as servicio_sobres
-from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel
+from apps.gestion_grabados.views import VACIO_INFO_EXTERNA, _normalizar_of, limpiar_texto_excel, valor_acabado
 
 RUTA_JS = Path(__file__).parent / 'static' / 'js'
 
@@ -1430,6 +1430,13 @@ class ConsultaHistoricaGrabadoTests(BaseGrabados):
         self.assertNotIn('name="ubicacion"', html)
         self.assertIn('ubicacion', admin.site._registry[Grabado].get_readonly_fields(None))
 
+    def test_plani_pasa_is_staff_al_js(self):
+        html = self.client.get(reverse('grabados:plani_consulta')).content.decode()
+        self.assertIn('<script id="plani-es-staff" type="application/json">false</script>', html)
+        self.client.force_login(self.admin)
+        html = self.client.get(reverse('grabados:plani_consulta')).content.decode()
+        self.assertIn('<script id="plani-es-staff" type="application/json">true</script>', html)
+
     def test_plani_pasa_el_formato_de_ubicacion_al_modal_recoger(self):
         respuesta = self.client.get(reverse('grabados:plani_consulta'))
         self.assertEqual(respuesta.context['patron_ubicacion'], servicio.PATRON_UBICACION.pattern)
@@ -1927,10 +1934,48 @@ class PlaniResolucionTests(BasePlani):
         self.aprobado()                                  # grabado por defecto de la 22741
         otro = self.aprobado(of='21000')                 # otro grabado aprobado
         self.mandar(otro, of='22741')
-        (estado,) = self.resolver(fila_plani('22741'))
+        # acabado_ext='1': con '0' (default de fila_plani) ahora sería EN_PROCESO.
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext='1'))
         self.assertEqual(estado['accion'], selectors.PLANI_RECOGER)
         self.assertEqual(estado['grabado']['id'], otro.id)
         self.assertTrue(estado['grabado']['usa_grabado_de_otra'])
+
+    def test_envio_abierto_terminada_en_filemaker_muestra_recoger(self):
+        envio = self.mandar(self.aprobado())
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext='1'))
+        self.assertEqual((estado['accion'], estado['envio']['id']), (selectors.PLANI_RECOGER, envio.id))
+        self.assertTrue(estado['terminada_en_planta'])
+
+    def test_envio_abierto_no_terminada_en_filemaker_sin_recoger(self):
+        envio = self.mandar(self.aprobado())
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext='0'))
+        self.assertEqual(estado['accion'], selectors.PLANI_EN_PROCESO)
+        self.assertEqual(estado['envio']['id'], envio.id)
+        self.assertFalse(estado['terminada_en_planta'])
+        self.assertIn('En máquina (GIETZ 01) desde el', estado['mensaje'])
+
+    def test_envio_abierto_sin_dato_de_filemaker_muestra_recoger(self):
+        self.mandar(self.aprobado())
+        sin_dato, no_encontrada = self.resolver(
+            fila_plani('22741', acabado_ext=None),
+            dict(fila_plani('22741', encontrado=False), acabado_ext=VACIO_INFO_EXTERNA['acabado_ext']))
+        for estado in (sin_dato, no_encontrada):
+            self.assertEqual(estado['accion'], selectors.PLANI_RECOGER)
+            self.assertFalse(estado['terminada_en_planta'])
+
+    def test_acabado_sin_envio_no_cambia_la_accion(self):
+        self.aprobado()
+        for acabado in ('1', '0', None):
+            (estado,) = self.resolver(fila_plani('22741', acabado_ext=acabado))
+            self.assertEqual(estado['accion'], selectors.PLANI_MANDAR)
+
+    def test_en_proceso_se_puede_recoger_igual_en_el_servidor(self):
+        # "Recoger igualmente" (staff) usa el mismo endpoint: el servidor no mira acabado_ext.
+        envio = self.mandar(self.aprobado())
+        (estado,) = self.resolver(fila_plani('22741', acabado_ext='0'))
+        self.assertEqual(estado['accion'], selectors.PLANI_EN_PROCESO)
+        self.recoger(envio)
+        self.assertEqual(Grabado.objects.get(pk=envio.grabado_id).estado, 'APROBADO')
 
     def test_of_completada_se_puede_mandar_otra_vez(self):
         envio = self.mandar(self.aprobado())
@@ -3368,6 +3413,18 @@ def png_de_prueba(ancho=20, alto=10):
     salida = BytesIO()
     Image.new('RGB', (ancho, alto), (200, 30, 30)).save(salida, format='PNG')
     return salida.getvalue()
+
+
+class ValorAcabadoTests(SimpleTestCase):
+
+    def test_si_no_y_sin_dato(self):
+        for valor in ('1', 1, 1.0, 'Sí', ' OK ', True):
+            self.assertEqual(valor_acabado(valor), '1', valor)
+        for valor in ('0', 0, 0.0, 'No', 'false'):
+            self.assertEqual(valor_acabado(valor), '0', valor)
+        for valor in (None, '', '  ', '—', 'pendiente'):
+            self.assertIsNone(valor_acabado(valor), valor)
+        self.assertIsNone(VACIO_INFO_EXTERNA['acabado_ext'])   # API caída / OF no encontrada
 
 
 class Codigo128Tests(SimpleTestCase):
