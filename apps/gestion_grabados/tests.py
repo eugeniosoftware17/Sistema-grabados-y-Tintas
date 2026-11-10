@@ -2958,22 +2958,96 @@ class DesactivarGrabadoTests(BasePlani):
         self.assertEqual(grabado.estado, 'APROBADO')
 
 
-class GrabadoNoSeEliminaTests(BaseGrabados):
+class GrabadoNoSeEliminaTests(BasePlani):
 
-    def test_admin_no_permite_eliminar_grabados(self):
+    def peticion(self, usuario):
+        peticion = RequestFactory().get('/')
+        peticion.user = usuario
+        return peticion
+
+    def puede_borrar(self, grabado, usuario=None):
+        grabado.refresh_from_db()
+        return admin.site._registry[Grabado].has_delete_permission(self.peticion(usuario or self.admin), grabado)
+
+    def url_borrar(self, grabado):
+        return reverse('admin:gestion_grabados_grabado_delete', args=[grabado.id])
+
+    def test_admin_solo_superusuario_y_nunca_masivo(self):
         grabado = self.registrar()['grabado']
         modelo_admin = admin.site._registry[Grabado]
-        peticion = RequestFactory().get('/')
-        peticion.user = self.admin
-        self.assertFalse(modelo_admin.has_delete_permission(peticion))
-        self.assertFalse(modelo_admin.has_delete_permission(peticion, grabado))
-        self.assertNotIn('delete_selected', modelo_admin.get_actions(peticion))
+        staff = User.objects.create_user('staff', password='x', is_staff=True)
+        staff.user_permissions.add(*Permission.objects.filter(codename__in=['view_grabado', 'delete_grabado']))
+        self.assertFalse(self.puede_borrar(grabado, staff))
+        self.assertTrue(self.puede_borrar(grabado))
+        self.assertFalse(modelo_admin.has_delete_permission(self.peticion(self.admin)))
+        self.assertNotIn('delete_selected', modelo_admin.get_actions(self.peticion(self.admin)))
         for campo in ('desactivado_por', 'desactivado_el', 'motivo_desactivacion', 'estado_previo'):
-            self.assertIn(campo, modelo_admin.get_readonly_fields(peticion, grabado))
-        self.client.force_login(self.admin)
-        url = reverse('admin:gestion_grabados_grabado_delete', args=[grabado.id])
-        self.assertEqual(self.client.post(url, {'post': 'yes'}).status_code, 403)
+            self.assertIn(campo, modelo_admin.get_readonly_fields(self.peticion(self.admin), grabado))
+        self.client.force_login(staff)
+        self.assertEqual(self.client.post(self.url_borrar(grabado), {'post': 'yes'}).status_code, 403)
         self.assertTrue(Grabado.objects.filter(pk=grabado.pk).exists())
+
+    def test_con_envio_abierto_o_usos_no_hay_boton(self):
+        grabado = self.aprobado()
+        envio = self.mandar(grabado)
+        self.assertFalse(self.puede_borrar(grabado))          # envío abierto
+        self.recoger(envio)                                     # OK -> 1 uso
+        self.assertEqual(Grabado.objects.get(pk=grabado.pk).usos_acumulados, 1)
+        self.assertFalse(self.puede_borrar(grabado))          # usos
+        self.client.force_login(self.admin)
+        cambio = self.client.get(reverse('admin:gestion_grabados_grabado_change', args=[grabado.id]))
+        self.assertEqual(cambio.status_code, 200)
+        self.assertNotContains(cambio, self.url_borrar(grabado))
+        self.assertEqual(self.client.post(self.url_borrar(grabado), {'post': 'yes'}).status_code, 403)
+        self.assertTrue(Grabado.objects.filter(pk=grabado.pk).exists())
+
+    def test_a_borra_en_cascada_un_grabado_de_prueba(self):
+        from django.contrib.admin.models import DELETION, LogEntry
+        grabado = self.registrar()['grabado']                  # fabricación INICIAL + K1 pendiente
+        servicio.cambiar_ubicacion(grabado_id=grabado.id, ubicacion='GBB-1-1', usuario=self.operario)
+        servicio.desactivar_grabado(grabado_id=grabado.id, motivo='Creado por error', usuario=self.admin)
+        sobre_id = Grabado.objects.get(pk=grabado.pk).sobre_asociado_id
+        self.assertIsNotNone(sobre_id)
+        self.client.force_login(self.admin)
+        cambio = self.client.get(reverse('admin:gestion_grabados_grabado_change', args=[grabado.id]))
+        self.assertContains(cambio, self.url_borrar(grabado))
+        confirmacion = self.client.get(self.url_borrar(grabado))
+        for texto in ('Pruebas K1: 1', 'Fabricaciones: 1', 'Historial de ubicaciones: 1',
+                      'Historial de activación: 1'):
+            self.assertContains(confirmacion, texto)
+        self.assertEqual(self.client.post(self.url_borrar(grabado), {'post': 'yes'}).status_code, 302)
+        self.assertFalse(Grabado.objects.filter(pk=grabado.pk).exists())
+        for modelo in (PruebaK1, FabricacionGrabado, HistorialUbicacion, HistorialActivacion):
+            self.assertFalse(modelo.objects.filter(grabado_id=grabado.pk).exists(), modelo.__name__)
+        self.assertTrue(LogEntry.objects.filter(action_flag=DELETION, object_id=str(grabado.pk)).exists())
+        # El sobre se conserva y Crear Grabado lo vuelve a enlazar.
+        self.assertTrue(Sobre.objects.filter(pk=sobre_id).exists())
+        nuevo = self.registrar()['grabado']
+        self.assertEqual(Grabado.objects.get(pk=nuevo.pk).sobre_asociado_id, sobre_id)
+
+    def test_a_envio_cerrado_sin_usos_lo_bloquea_por_protect(self):
+        grabado = self.aprobado()
+        self.recoger(self.mandar(grabado), estado='REPETIR', comentario='Dañado en máquina')
+        self.assertEqual(Grabado.objects.get(pk=grabado.pk).usos_acumulados, 0)
+        self.assertTrue(self.puede_borrar(grabado))           # sale el botón...
+        self.client.force_login(self.admin)
+        respuesta = self.client.post(self.url_borrar(grabado), {'post': 'yes'})
+        self.assertEqual(respuesta.status_code, 200)          # ...pero Django muestra lo protegido
+        self.assertTrue(Grabado.objects.filter(pk=grabado.pk).exists())
+        self.assertEqual(EnvioMaquina.objects.filter(grabado=grabado).count(), 1)
+
+    def test_a_servicio_no_borra_migrados_ni_usados(self):
+        grabado = self.registrar(tipo='DIRECTO', maquina_id='')['grabado']
+        orden = OrdenFabricacion.objects.create(of='22741', referencia='22741', proceso='STAMPING')
+        LegadoOrden.objects.create(orden=orden, rol='FABRICACION', grabado=grabado)
+        with self.assertRaises(servicio.GrabadoNoEliminable):
+            servicio.eliminar_grabado_de_prueba(grabado_id=grabado.id)
+        otro = self.registrar(of='23000', tipo='DIRECTO', maquina_id='')['grabado']
+        Grabado.objects.filter(pk=otro.pk).update(usos_acumulados=2)
+        with self.assertRaises(servicio.GrabadoNoEliminable):
+            servicio.eliminar_grabado_de_prueba(grabado_id=otro.id)
+        self.assertEqual(Grabado.objects.filter(pk__in=[grabado.pk, otro.pk]).count(), 2)
+        self.assertEqual(FabricacionGrabado.objects.filter(grabado__in=[grabado, otro]).count(), 2)
 
     def test_historial_de_activacion_es_de_solo_lectura_en_el_admin(self):
         modelo_admin = admin.site._registry[HistorialActivacion]

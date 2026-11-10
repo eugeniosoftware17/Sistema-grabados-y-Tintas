@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from ..models import (
     EnvioMaquina, EstadoBano, FabricacionGrabado, Grabado, HistorialActivacion, HistorialUbicacion,
-    Maquina, OrdenFabricacion, PruebaK1,
+    LegadoOrden, Maquina, OrdenFabricacion, PruebaK1,
 )
 
 PROCESOS_VALIDOS = ('STAMPING', 'EMBOSSING')
@@ -696,3 +696,67 @@ def reactivar_grabado(*, grabado_id, usuario):
         HistorialActivacion.objects.create(grabado=grabado, accion='REACTIVAR',
                                            estado=grabado.estado, usuario=usuario)
     return grabado
+
+
+# ------------------------------------------------------- eliminación (solo admin)
+# Regla general: un grabado no se elimina, se desactiva. Única excepción: un
+# superusuario puede borrarlo desde /crdadmin/ si se creó por error y nunca se
+# usó (sin usos acumulados ni envío a máquina abierto).
+
+def motivo_no_eliminable(grabado):
+    """None si el grabado se puede eliminar desde el admin; si no, el motivo."""
+    if grabado.usos_acumulados > 0:
+        return 'tiene usos acumulados'
+    if grabado.envios.filter(recogido_el__isnull=True).exists():
+        return 'tiene un envío a máquina abierto'
+    return None
+
+
+class GrabadoNoEliminable(TransicionInvalida):
+    pass
+
+
+def bloqueos_eliminacion_en_cascada(grabado):
+    """Motivos por los que el grabado NO se puede borrar junto con sus registros
+    (lista vacía = se puede). Los envíos (aunque estén cerrados) son uso en
+    producción y lo que viene de la migración sostiene la conciliación de
+    migrar_a_grabados: nunca se borran en cascada."""
+    motivos = []
+    motivo = motivo_no_eliminable(grabado)
+    if motivo:
+        motivos.append(motivo)
+    if grabado.envios.exists():
+        motivos.append('tiene envíos a máquina')
+    if LegadoOrden.objects.filter(Q(grabado=grabado) | Q(fabricacion__grabado=grabado)
+                                  | Q(envio__grabado=grabado)).exists():
+        motivos.append('viene de la migración (enlace con órdenes legadas)')
+    return motivos
+
+
+def registros_de_eliminacion(grabado):
+    """Lo que se borra junto con el grabado (para la confirmación del admin)."""
+    return {
+        'Pruebas K1': grabado.pruebas_k1.count(),
+        'Fabricaciones': grabado.fabricaciones.count(),
+        'Historial de ubicaciones': grabado.historial_ubicaciones.count(),
+        'Historial de activación': grabado.historial_activaciones.count(),
+    }
+
+
+def eliminar_grabado_de_prueba(*, grabado_id):
+    """Borra un grabado creado por error junto con sus K1, fabricaciones e
+    historiales. Vuelve a comprobar todo con el grabado bloqueado. El sobre se
+    conserva (Crear Grabado lo vuelve a enlazar) y el baño acumulado no se resta.
+    El rastro queda en el log del admin (django_admin_log)."""
+    with transaction.atomic():
+        grabado = _grabado_bloqueado(grabado_id)
+        motivos = bloqueos_eliminacion_en_cascada(grabado)
+        if motivos:
+            raise GrabadoNoEliminable(f'No se puede eliminar el grabado: {"; ".join(motivos)}. '
+                                      'Desactívalo desde su panel de detalle.')
+        # Orden por los PROTECT: el K1 apunta a su fabricación.
+        PruebaK1.objects.filter(grabado=grabado).delete()
+        FabricacionGrabado.objects.filter(grabado=grabado).delete()
+        HistorialUbicacion.objects.filter(grabado=grabado).delete()
+        HistorialActivacion.objects.filter(grabado=grabado).delete()
+        grabado.delete()

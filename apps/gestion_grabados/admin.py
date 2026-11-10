@@ -2,11 +2,13 @@ import json
 
 from django import forms
 from django.contrib import admin
+from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseRedirect
 from django.urls import reverse
 
 from . import selectors
 from .services import etiquetas
+from .services import grabados as servicio_grabados
 from .models import (
     OrdenFabricacion, EstadoBano,
     Maquina, Grabado, FabricacionGrabado, PruebaK1, EnvioMaquina, LegadoOrden,
@@ -101,8 +103,29 @@ class GrabadoAdmin(admin.ModelAdmin):
     inlines = [FabricacionGrabadoInline, PruebaK1Inline, EnvioMaquinaInline]
 
     def has_delete_permission(self, request, obj=None):
-        # Un grabado nunca se elimina: se desactiva desde su panel de detalle.
-        return False
+        # Regla general: un grabado no se elimina, se desactiva desde su panel de detalle.
+        # Excepción: el superusuario borra, desde el formulario, uno creado por error sin
+        # usos ni envío abierto. Sin obj (acción masiva delete_selected) nunca.
+        if obj is None or not request.user.is_superuser:
+            return False
+        return servicio_grabados.motivo_no_eliminable(obj) is None
+
+    def get_deleted_objects(self, objs, request):
+        # Los registros enlazados tienen PROTECT y Django bloquearía el borrado. Si el
+        # servicio lo permite, se listan los que se borran en cascada; si no (envíos,
+        # migración), Django muestra lo que lo protege y no deja confirmar.
+        (grabado,) = objs   # solo desde el formulario: la acción masiva no existe
+        if servicio_grabados.bloqueos_eliminacion_en_cascada(grabado):
+            return super().get_deleted_objects(objs, request)
+        lista = [str(grabado)] + [f'{nombre}: {n}' for nombre, n in
+                                  servicio_grabados.registros_de_eliminacion(grabado).items() if n]
+        return lista, {Grabado._meta.verbose_name_plural: 1}, set(), []
+
+    def delete_model(self, request, obj):
+        try:
+            servicio_grabados.eliminar_grabado_de_prueba(grabado_id=obj.pk)
+        except servicio_grabados.ErrorGrabado as e:   # cambió entre la confirmación y el POST
+            raise PermissionDenied(e.mensaje)
 
 
 @admin.register(FabricacionGrabado)
